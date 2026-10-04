@@ -13,6 +13,26 @@ window.SITE_CONFIG = {
     courseName: "○○○",                 // 「」 없이 과목명만 입력
   },
 
+  /* ---------- 공지사항 (관리자 화면 > 공지 관리에서 올리는 것을 권장) ----------
+   *  date: "YYYY-MM-DD", pinned: true면 맨 위에 고정 */
+  notices: [
+    {
+      title: "첫 수업은 3월 3일(화) 14시, ○○관 000호에서 시작합니다",
+      body: "첫 시간에는 실습 계정을 함께 만듭니다. 노트북과 Google 계정을 꼭 준비해 주세요.",
+      date: "2026-02-25",
+      pinned: true,
+    },
+  ],
+
+  /* ---------- 관리자 비밀번호 ----------
+   *  비밀번호 원문 대신 '해시값'만 저장합니다. 직접 고치지 말고
+   *  관리자 화면 > 비밀번호 변경에서 바꾼 뒤 설정 파일을 내려받아 이 파일을 교체하세요. */
+  admin: {
+    salt: "c3d0c7c79ed375fe40ece535e84aa720",
+    iterations: 20000,
+    passwordHash: "e606cd31a81eb0b97145f9b4af23f997e0e11c621408f42071be93c43b88b717",
+  },
+
   /* ---------- 상단 메뉴 (target은 섹션 id: about / curriculum / calendar / participate / tools / enroll / apply / faq / instructor) ---------- */
   nav: [
     { label: "프로그램 소개", target: "about" },

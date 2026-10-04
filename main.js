@@ -2,6 +2,18 @@
 (function () {
   "use strict";
 
+  // 관리자 화면에서 고친 설정(브라우저에 저장된 수정본)이 있으면 config.js 대신 사용
+  if (window.SITE_CONFIG) {
+    window.SITE_CONFIG_DEFAULT = JSON.parse(JSON.stringify(window.SITE_CONFIG));
+    try {
+      const saved = localStorage.getItem("aiweb:configOverride");
+      const parsed = saved ? JSON.parse(saved) : null;
+      if (parsed && typeof parsed === "object" && parsed.site) {
+        window.SITE_CONFIG = parsed;
+        window.SITE_CONFIG_OVERRIDDEN = true;
+      }
+    } catch (e) { /* 수정본을 못 읽으면 config.js 사용 */ }
+  }
   const C = window.SITE_CONFIG;
   if (!C) {
     document.body.innerHTML = "<p style='padding:24px'>config.js를 불러오지 못했습니다. 파일 이름과 위치를 확인해 주세요.</p>";
@@ -152,6 +164,44 @@
     p.style.animationDuration = `${9 + Math.random() * 8}s`;
     p.style.animationDelay = `${-Math.random() * 16}s`;
     petals.appendChild(p);
+  }
+
+  /* ----- 공지사항 (관리자 화면에서 올림) ----- */
+  const noticeSection = $("#notices");
+  function renderNotices() {
+    if (!noticeSection) return;
+    const items = (C.notices || [])
+      .map((n, i) => ({ ...n, _i: i }))
+      .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || String(b.date || "").localeCompare(String(a.date || "")));
+    noticeSection.hidden = !items.length;
+    if (!items.length) { noticeSection.innerHTML = ""; return; }
+    const today = startOfDay(now());
+    noticeSection.innerHTML =
+      `<div class="notice-card card">
+        <div class="notice-head"><h2>📢 공지사항</h2><span class="notice-count">${items.length}건</span></div>
+        <ul class="notice-list">${list(items, (n) => {
+          const d = n.date ? parseDate(n.date) : null;
+          const isNew = d && (today - d) / 86400000 <= 7 && d <= today;
+          return `<li class="notice-item">
+            <button class="notice-q" aria-expanded="false" aria-controls="notice-${n._i}">
+              ${n.pinned ? '<span class="notice-pin">📌 고정</span>' : ""}
+              <span class="notice-title">${esc(n.title)}</span>
+              ${isNew ? '<span class="notice-new">NEW</span>' : ""}
+              <span class="notice-date">${d ? `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}` : ""}</span>
+            </button>
+            <div class="notice-a" id="notice-${n._i}"><div><p>${esc(n.body || "").replace(/\n/g, "<br />")}</p></div></div>
+          </li>`;
+        })}</ul>
+      </div>`;
+  }
+  renderNotices();
+  if (noticeSection) {
+    noticeSection.addEventListener("click", (e) => {
+      const q = e.target.closest(".notice-q");
+      if (!q) return;
+      const open = q.parentElement.classList.toggle("open");
+      q.setAttribute("aria-expanded", String(open));
+    });
   }
 
   /* ----- 통계 카드 ----- */
@@ -690,6 +740,6 @@
   window.SiteCore = {
     C, $, $$, esc, list, sectionHead, reduceMotion,
     WD, pad, parseDate, parseDateTime, withTime, addDays, startOfDay, ymd, fmtDate, fmtTime,
-    now, weeks, remaining, updateCountdowns, openWeek, observeReveal,
+    now, weeks, remaining, updateCountdowns, openWeek, observeReveal, renderNotices,
   };
 })();

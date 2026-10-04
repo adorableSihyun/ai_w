@@ -58,7 +58,18 @@
       if (!listeners.has(key)) listeners.set(key, []);
       listeners.get(key).push(fn);
     };
-    return { read, write, remove, on };
+    // 접두어로 시작하는 저장 키 목록 (관리자 화면의 출석·제출 집계용)
+    const keys = (prefix = "") => {
+      const out = new Set([...mem.keys()].filter((k) => k.indexOf(prefix) === 0));
+      try {
+        if (ls) for (let i = 0; i < ls.length; i++) {
+          const k = ls.key(i);
+          if (k && k.indexOf(PREFIX + prefix) === 0) out.add(k.slice(PREFIX.length));
+        }
+      } catch (e) { /* 무시 */ }
+      return [...out];
+    };
+    return { read, write, remove, on, keys };
   })();
 
   /* ----- 공통 도우미 ----- */
@@ -440,6 +451,15 @@
         (idErr ? idEl : nameEl).focus();
         return;
       }
+      // 관리자가 수강생 명단을 등록했다면 명단에 있는 학생만 로그인
+      const roster = store.read("roster", []) || [];
+      if (roster.length && !roster.some((r) => String(r.studentId) === id && String(r.name).trim() === name)) {
+        $("#login-id-err").textContent = "수강생 명단에 없는 학번·이름이에요. 학번과 이름을 확인하거나 교수자에게 문의해 주세요.";
+        idEl.setAttribute("aria-invalid", "true");
+        idEl.focus();
+        return;
+      }
+      store.write("knownStudents", { ...(store.read("knownStudents", {}) || {}), [id]: name });
       store.write("session", { studentId: id, name, loginAt: Date.now() });
       toast(`${name} 님, 로그인되었어요.`, "success");
       return;
@@ -797,7 +817,8 @@
    * ===================================================================== */
   const pop = C.popup || {};
   const hideKey = "popupHideUntil";
-  const shouldShowPopup = () => pop.enabled !== false && Date.now() > (Number(store.read(hideKey, 0)) || 0);
+  const adminActive = () => { try { return sessionStorage.getItem("aiweb:admin") === "1"; } catch (e) { return false; } };
+  const shouldShowPopup = () => pop.enabled !== false && !adminActive() && Date.now() > (Number(store.read(hideKey, 0)) || 0);
 
   const openPopup = () => {
     if ($(".modal-backdrop")) return;
