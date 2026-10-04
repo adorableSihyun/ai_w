@@ -862,6 +862,70 @@ body.modal-open { overflow: hidden; }
 .icon-btn[disabled] { opacity: .35; cursor: default; }
 .json-editor { width: 100%; min-height: 420px; padding: 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: #fffdf8; font: .82rem/1.5 ui-monospace, Consolas, monospace; resize: vertical; margin-bottom: 10px; }
 
+/* =====================================================================
+ *  주차별 강의 자료 · 영상 임베드 · 주차 편집
+ * ===================================================================== */
+.material-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.material { border: 1px solid var(--line); border-radius: 14px; background: var(--paper); overflow: hidden; }
+.material-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }
+.material-icon { flex: 0 0 auto; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px; background: var(--sage-50); font-size: 1.1rem; filter: grayscale(.3); }
+.material-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.4; }
+.material-text b { font-weight: 500; color: var(--olive-900); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.material-text small { color: var(--ink-mute); font-size: .78rem; }
+.material-row .text-btn { flex: 0 0 auto; text-decoration: none; }
+.material-preview { border-top: 1px solid var(--line); background: var(--paper-2); }
+.material-preview iframe { display: block; width: 100%; height: min(70vh, 520px); border: 0; background: #fff; }
+.material-note { margin: 0; padding: 8px 12px; font-size: .78rem; color: var(--ink-mute); }
+
+.video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin-bottom: 8px; }
+.video-embed { margin: 0; }
+.video-frame { position: relative; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden; background: var(--olive-900); }
+.video-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.video-poster { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; cursor: pointer; background: var(--olive-900); }
+.video-poster img { width: 100%; height: 100%; object-fit: cover; opacity: .88; transition: opacity .2s, transform .4s; }
+.video-poster:hover img { opacity: 1; transform: scale(1.03); }
+.play-big {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 62px; height: 62px; display: grid; place-items: center; padding-left: 4px;
+  border-radius: 50%; background: rgba(251, 249, 244, .92); color: var(--olive-900); font-size: 1.3rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .25); transition: transform .2s;
+}
+.video-poster:hover .play-big { transform: translate(-50%, -50%) scale(1.08); }
+.video-poster:focus-visible { outline: 3px solid var(--sage-300); outline-offset: -3px; }
+.video-embed figcaption { margin-top: 6px; font-size: .88rem; color: var(--olive-900); font-weight: 500; }
+
+.week-admin {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 16px 0 0; padding: 10px 12px; border-radius: 12px;
+  background: var(--clay-100); border: 1px dashed rgba(167, 123, 90, .45);
+}
+.week-admin-label { margin-right: auto; font-size: .72rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--clay); }
+.week-add-btn { margin-left: auto; }
+
+.modal.week-editor { width: min(760px, 100%); padding: 32px 28px 24px; text-align: left; }
+.week-editor h3 { margin-top: 0; }
+.we-form { display: grid; gap: 18px; }
+.we-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+.we-grid .full { grid-column: 1 / -1; }
+.week-editor .field input[type="date"], .week-editor .field input[type="time"], .week-editor .field input[type="datetime-local"], .week-editor .field input[type="url"] {
+  width: 100%; padding: 11px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: #fffdf8; font: inherit; color: var(--ink);
+}
+.we-help { display: block; color: var(--ink-mute); font-size: .78rem; margin: 0 0 8px; }
+.we-help code { padding: 0 5px; border-radius: 5px; background: var(--sage-50); }
+.we-set { margin: 0; padding: 14px 16px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper-2); }
+.we-set legend { padding: 0 6px; font-family: var(--serif); font-weight: 600; color: var(--olive-900); }
+.we-rows { display: grid; gap: 10px; margin-bottom: 10px; }
+.we-rows:empty { display: none; }
+.we-row { padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+.we-row-fields { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.4fr) auto; gap: 8px; align-items: center; }
+.we-row input { width: 100%; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 10px; background: #fffdf8; font: inherit; font-size: .9rem; }
+.we-status { display: flex; align-items: center; gap: 8px; margin: 6px 2px 0; font-size: .78rem; color: var(--ink-mute); min-height: 0; }
+.we-status:empty, .we-status span:empty { display: none; }
+.we-status img { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; }
+.we-status.ok { color: var(--ok); }
+.we-status.bad { color: var(--bad); }
+.we-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
 /* 움직임 줄이기 설정 */
 @media (prefers-reduced-motion: reduce) {
   html, .slider-track { scroll-behavior: auto; }
@@ -983,4 +1047,16 @@ body.modal-open { overflow: hidden; }
   .admin-search { min-width: 0; width: 100%; }
   .ed-panel { padding: 14px; }
   .to-top { right: 16px; bottom: 16px; width: 44px; height: 44px; }
+}
+
+/* 주차 편집 · 영상 (휴대폰) */
+@media (max-width: 640px) {
+  .modal.week-editor { padding: 26px 16px 18px; }
+  .we-grid { grid-template-columns: 1fr; }
+  .we-row-fields { grid-template-columns: 1fr auto; }
+  .we-row-fields .we-title { grid-column: 1 / -1; }
+  .video-grid { grid-template-columns: 1fr; }
+  .material-row { flex-wrap: wrap; }
+  .material-text { flex-basis: calc(100% - 52px); }
+  .material-row .text-btn { flex: 1; text-align: center; }
 }

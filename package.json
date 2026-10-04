@@ -1,0 +1,16 @@
+{
+  "name": "ai-course-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "고려대학교 강의 소개 사이트 (정적 페이지 + PostgreSQL API 서버)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}

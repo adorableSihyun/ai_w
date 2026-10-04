@@ -73,7 +73,28 @@
     set: (k, v) => { try { sessionStorage.setItem(k, v); } catch (e) { /* 무시 */ } },
     del: (k) => { try { sessionStorage.removeItem(k); } catch (e) { /* 무시 */ } },
   };
-  const isAdmin = () => ss.get("aiweb:admin") === "1";
+  // 서버 모드: 서버가 발급한 관리자 토큰 / 데모 모드: 이 탭의 로그인 표시
+  const API = !!F.API;
+  const isAdmin = () => (API ? !!ss.get("aiweb:adminToken") : ss.get("aiweb:admin") === "1");
+  const setAdmin = (token) => {
+    if (API) ss.set("aiweb:adminToken", token);
+    ss.set("aiweb:admin", "1"); // features.js가 관리자 접속 중에는 안내 팝업을 띄우지 않도록
+  };
+  const clearAdmin = () => { ss.del("aiweb:adminToken"); ss.del("aiweb:admin"); };
+  // 관리자 API 호출 (토큰이 만료되면 다시 로그인하도록 안내)
+  const adminApi = async (path, opts = {}) => {
+    try {
+      return await F.api(path, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${ss.get("aiweb:adminToken") || ""}` } });
+    } catch (err) {
+      if (err.status === 401) {
+        clearAdmin();
+        syncLock();
+        if (typeof closePanel === "function") closePanel();
+        toast("관리자 로그인이 만료되었어요. 다시 로그인해 주세요.", "warn");
+      }
+      throw err;
+    }
+  };
   const lockBtn = $(".admin-lock");
   const syncLock = () => {
     lockBtn.classList.toggle("unlocked", isAdmin());
@@ -82,7 +103,31 @@
 
   /* ----- 공통 도우미 ----- */
   const clone = (o) => JSON.parse(JSON.stringify(o));
-  const saveOverride = (cfg) => store.write("configOverride", cfg);
+  // 고친 설정 저장: 서버 모드는 DB(모든 방문자에게 반영), 데모 모드는 이 브라우저
+  const saveOverride = async (cfg) => {
+    if (API) await adminApi("/api/admin/config", { method: "PUT", body: { config: cfg } });
+    else store.write("configOverride", cfg);
+  };
+  const clearOverride = async () => {
+    if (API) await adminApi("/api/admin/config", { method: "DELETE" });
+    else store.remove("configOverride");
+  };
+  // 서버 모드: 신청·명단·출석·제출 기록을 서버에서 가져와 화면용 캐시에 담음
+  const loadAdminData = async () => {
+    if (!API) return;
+    const d = await adminApi("/api/admin/data");
+    store.write("applications", d.applications || []);
+    store.write("roster", d.roster || []);
+    store.write("knownStudents", d.students || {});
+    store.keys("attendance:").forEach((k) => store.remove(k));
+    store.keys("submissions:").forEach((k) => store.remove(k));
+    Object.keys(d.attendance || {}).forEach((sid) => store.write(`attendance:${sid}`, d.attendance[sid]));
+    Object.keys(d.submissions || {}).forEach((sid) => store.write(`submissions:${sid}`, d.submissions[sid]));
+  };
+  // 오류가 나면 알림으로 보여 주는 래퍼
+  const attempt = (promise, okMsg) => promise
+    .then((v) => { if (okMsg) toast(okMsg, "success"); return v; })
+    .catch((err) => { toast(err.message || "처리하지 못했어요.", "warn"); throw err; });
   const download = (filename, text, type) => {
     const blob = new Blob([text], { type });
     const a = document.createElement("a");
@@ -214,6 +259,26 @@
       }
       const pw = input.value;
       if (!pw) { err.textContent = "비밀번호를 입력해 주세요."; input.focus(); return; }
+      if (API) {
+        // 서버 모드: 서버가 비밀번호를 확인하고 토큰을 발급
+        const btn = $(".admin-login-form button[type=submit]", wrap);
+        btn.disabled = true;
+        F.api("/api/admin/login", { method: "POST", body: { password: pw } })
+          .then((d) => {
+            setAdmin(d.token);
+            syncLock();
+            close();
+            openPanel("dashboard");
+            window.dispatchEvent(new Event("aiweb:admin-change"));
+          })
+          .catch((ex) => {
+            btn.disabled = false;
+            err.textContent = ex.message;
+            input.setAttribute("aria-invalid", "true");
+            input.select();
+          });
+        return;
+      }
       const a = C.admin || {};
       const ok = a.passwordHash && hashPassword(pw, a.salt || "", Number(a.iterations) || 1) === a.passwordHash;
       if (!ok) {
@@ -230,11 +295,12 @@
         input.select();
         return;
       }
-      ss.set("aiweb:admin", "1");
+      setAdmin("");
       ss.set("aiweb:adminFails", "0");
       syncLock();
       close();
       openPanel("dashboard");
+      window.dispatchEvent(new Event("aiweb:admin-change"));
     });
   };
 
@@ -286,7 +352,15 @@
     document.body.classList.add("modal-open");
     panel.hidden = false;
     requestAnimationFrame(() => panel.classList.add("show"));
-    showTab(tab, opts);
+    refresh(tab, opts);
+  };
+  // 서버에서 최신 기록을 불러온 뒤 화면을 다시 그림 (데모 모드는 바로 그림)
+  const refresh = (tab = currentTab, opts = {}) => {
+    if (!API) { showTab(tab, opts); return Promise.resolve(); }
+    main().innerHTML = `<p class="admin-empty">서버에서 불러오는 중…</p>`;
+    return loadAdminData()
+      .then(() => showTab(tab, opts))
+      .catch((err) => { if (main()) main().innerHTML = `<p class="admin-empty">불러오지 못했어요: ${esc(err.message)}</p>`; });
   };
   const closePanel = () => {
     if (!panel) return;
@@ -337,7 +411,8 @@
     const card = (icon, label, value, tab) =>
       `<button class="stat-tile" data-tab="${tab}"><span aria-hidden="true">${icon}</span><b>${value}</b><small>${esc(label)}</small></button>`;
     return head("대시보드", "사이트 현황을 한눈에 확인해요.") +
-      (window.SITE_CONFIG_OVERRIDDEN ? `<p class="admin-banner">✏️ 이 브라우저에서 고친 설정이 적용되어 있어요. 다른 방문자에게도 보이게 하려면 <button class="link-btn" data-tab="files">설정 파일</button>을 내려받아 config.js를 교체하세요.</p>` : "") +
+      (API ? `<p class="admin-banner muted">🗄️ 서버 모드: 신청·출석·과제·명단·설정이 데이터베이스에 저장되고, 고친 내용은 <b>모든 방문자에게 바로</b> 보여요.</p>` : "") +
+      (window.SITE_CONFIG_OVERRIDDEN && !API ? `<p class="admin-banner">✏️ 이 브라우저에서 고친 설정이 적용되어 있어요. 다른 방문자에게도 보이게 하려면 <button class="link-btn" data-tab="files">설정 파일</button>을 내려받아 config.js를 교체하세요.</p>` : "") +
       `<div class="tile-grid">
         ${card("📝", "수강 신청", getApps().length, "applications")}
         ${card("👥", "등록 수강생", getRoster().length, "roster")}
@@ -379,10 +454,11 @@
         <button class="text-btn sm danger" data-admin="notice-del" data-i="${i}">삭제</button></td></tr>`), "아직 올린 공지가 없어요.")}`;
   };
   const saveNotices = (items) => {
+    const before = C.notices;
     C.notices = items;
-    saveOverride(clone(C));
-    window.SITE_CONFIG_OVERRIDDEN = true;
-    S.renderNotices();
+    return attempt(saveOverride(clone(C)))
+      .then(() => { window.SITE_CONFIG_OVERRIDDEN = true; S.renderNotices(); })
+      .catch((err) => { C.notices = before; throw err; });
   };
 
   /* ----- 수강생 명단 ----- */
@@ -437,6 +513,10 @@
     store.write("roster", roster);
     return { added, dup, bad };
   };
+  // 명단 추가: 서버 모드는 DB에, 데모 모드는 이 브라우저에
+  const addPeople = (people) => (API
+    ? attempt(adminApi("/api/admin/roster", { method: "POST", body: { people } }))
+    : Promise.resolve(addToRoster(people)));
   const parseCsvLines = (text) => text.replace(/^﻿/, "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
     // 따옴표로 감싼 칸도 처리
     const cells = [];
@@ -493,14 +573,14 @@
       })}</div>` +
       table(["주차", "과제", "학번", "이름", "파일", "크기", "제출 일시", "상태"], rows.map((r) => `<tr>
         <td class="nowrap">${esc(r.w.label)}</td><td>${esc(r.w.assignment.title)}</td><td class="nowrap">${esc(r.sid)}</td><td class="nowrap">${esc(r.name)}</td>
-        <td class="wrap">${esc(r.s.fileName)}</td><td class="nowrap">${(r.s.size / 1024).toFixed(1)} KB</td><td class="nowrap">${esc(stampText(r.s.time))}</td>
+        <td class="wrap">${esc(r.s.fileName)}${API && r.s.id ? ` <button class="text-btn sm" data-admin="sub-file" data-id="${r.s.id}" data-name="${esc(r.s.fileName)}">⬇ 받기</button>` : ""}</td><td class="nowrap">${(r.s.size / 1024).toFixed(1)} KB</td><td class="nowrap">${esc(stampText(r.s.time))}</td>
         <td><span class="st ${r.late ? "st-l" : "st-p"} wide">${r.late ? "지각" : "제출"}</span></td></tr>`), "아직 제출된 과제가 없어요.");
   };
 
   /* ----- 설정 파일 ----- */
   RENDER.files = () => head("설정 파일", "사이트 설정(공지 포함)을 파일로 저장하거나 불러와요.") +
     `<p class="admin-banner ${window.SITE_CONFIG_OVERRIDDEN ? "" : "muted"}">${window.SITE_CONFIG_OVERRIDDEN
-      ? "✏️ 지금은 <b>이 브라우저에서 고친 설정</b>이 적용되어 있어요."
+      ? (API ? "🗄️ 지금은 <b>관리자 화면에서 고친 설정(데이터베이스)</b>이 모든 방문자에게 적용되어 있어요." : "✏️ 지금은 <b>이 브라우저에서 고친 설정</b>이 적용되어 있어요.")
       : "📄 지금은 <b>config.js 원본</b>이 그대로 적용되어 있어요."}</p>
     <div class="admin-grid-2">
       <div class="admin-card">
@@ -510,14 +590,14 @@
       </div>
       <div class="admin-card">
         <h4>📂 설정 파일 불러오기</h4>
-        <p class="admin-note">관리자 화면에서 내려받았던 config.js(또는 .json) 파일을 고르면 이 브라우저에 바로 적용돼요.</p>
+        <p class="admin-note">관리자 화면에서 내려받았던 config.js(또는 .json) 파일을 고르면 ${API ? "사이트에 바로 적용돼요(모든 방문자)." : "이 브라우저에 바로 적용돼요."}</p>
         <label class="btn btn-sm btn-secondary file-btn">파일 선택<input type="file" accept=".js,.json" data-admin-file="config" /></label>
         <div class="import-preview"></div>
       </div>
     </div>
     <div class="admin-card danger-zone">
       <h4>↩️ 원래대로 되돌리기</h4>
-      <p class="admin-note">이 브라우저에서 고친 설정을 지우고 config.js 원본으로 돌아가요. (수강생 명단·신청·출석 기록은 지워지지 않아요)</p>
+      <p class="admin-note">${API ? "관리자 화면에서" : "이 브라우저에서"} 고친 설정(공지·주차 수정 포함)을 지우고 config.js 원본으로 돌아가요. (수강생 명단·신청·출석 기록은 지워지지 않아요)</p>
       <button class="text-btn danger" data-admin="reset" ${window.SITE_CONFIG_OVERRIDDEN ? "" : "disabled"}>고친 설정 지우기</button>
     </div>`;
   let pendingImport = null;
@@ -530,7 +610,9 @@
       <div class="field"><label for="pw-new2">새 비밀번호 확인</label><input id="pw-new2" name="next2" type="password" autocomplete="new-password" /></div>
       <p class="field-error" data-err></p>
       <button class="btn btn-sm" type="submit">비밀번호 바꾸기</button>
-      <p class="admin-note">바꾼 비밀번호는 이 브라우저에 먼저 적용돼요. 배포된 사이트에도 적용하려면 <b>설정 파일</b>에서 config.js를 내려받아 교체하세요.</p>
+      <p class="admin-note">${API
+        ? "바꾼 비밀번호는 데이터베이스에 저장되어 바로 적용돼요."
+        : "바꾼 비밀번호는 이 브라우저에 먼저 적용돼요. 배포된 사이트에도 적용하려면 <b>설정 파일</b>에서 config.js를 내려받아 교체하세요."}</p>
     </form>`;
 
   /* =====================================================================
@@ -676,7 +758,8 @@
     const tabBtn = e.target.closest("[data-tab]");
     if (tabBtn) {
       if (currentTab === "editor" && edDirty && tabBtn.dataset.tab !== "editor" && !confirm("저장하지 않은 편집 내용이 있어요. 다른 메뉴로 이동할까요? (편집 내용은 그대로 남아 있어요)")) return;
-      showTab(tabBtn.dataset.tab);
+      const t = tabBtn.dataset.tab;
+      if (["dashboard", "applications", "attendance", "submissions", "roster"].includes(t)) refresh(t); else showTab(t);
       return;
     }
     const sec = e.target.closest("[data-ed-section]");
@@ -708,10 +791,27 @@
     const i = Number(act.dataset.i);
     if (a === "close") closePanel();
     else if (a === "logout") {
-      ss.del("aiweb:admin");
+      clearAdmin();
       syncLock();
       closePanel();
       toast("관리자 화면을 잠갔어요.");
+      window.dispatchEvent(new Event("aiweb:admin-change"));
+    }
+    else if (a === "sub-file") {
+      // 제출 파일 내려받기 (서버 모드)
+      act.disabled = true;
+      fetch(`/api/admin/submissions/${encodeURIComponent(act.dataset.id)}/file`, { headers: { Authorization: `Bearer ${ss.get("aiweb:adminToken") || ""}` } })
+        .then((res) => { if (!res.ok) throw new Error(res.status === 401 ? "관리자 로그인이 만료되었어요." : "파일을 받지 못했어요."); return res.blob(); })
+        .then((blob) => {
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(blob);
+          link.download = act.dataset.name || "submission";
+          document.body.appendChild(link);
+          link.click();
+          setTimeout(() => { URL.revokeObjectURL(link.href); link.remove(); }, 500);
+        })
+        .catch((err) => toast(err.message, "warn"))
+        .finally(() => { act.disabled = false; });
     }
     // 공지
     else if (a === "notice-edit") { editingNotice = i; showTab("notices"); $("#nt-title", panel).focus(); }
@@ -721,19 +821,26 @@
       if (!confirm(`'${items[i].title}' 공지를 삭제할까요?`)) return;
       items.splice(i, 1);
       editingNotice = null;
-      saveNotices(items);
-      showTab("notices");
-      toast("공지를 삭제했어요.");
+      saveNotices(items).then(() => { showTab("notices"); toast("공지를 삭제했어요."); }).catch(() => {});
     }
     // 명단
-    else if (a === "roster-del") { const r = getRoster(); r.splice(i, 1); store.write("roster", r); showTab("roster"); }
-    else if (a === "roster-clear") { if (confirm("수강생 명단을 모두 삭제할까요?")) { store.write("roster", []); showTab("roster"); } }
-    else if (a === "roster-from-apps") { bulkResult(addToRoster(getApps())); showTab("roster"); }
+    else if (a === "roster-del") {
+      const r = getRoster();
+      if (API) { attempt(adminApi(`/api/admin/roster/${encodeURIComponent(r[i].studentId)}`, { method: "DELETE" })).then(() => refresh("roster")).catch(() => {}); return; }
+      r.splice(i, 1); store.write("roster", r); showTab("roster");
+    }
+    else if (a === "roster-clear") {
+      if (!confirm("수강생 명단을 모두 삭제할까요?")) return;
+      if (API) { attempt(adminApi("/api/admin/roster", { method: "DELETE" })).then(() => refresh("roster")).catch(() => {}); return; }
+      store.write("roster", []); showTab("roster");
+    }
+    else if (a === "roster-from-apps") { addPeople(getApps()).then((r) => { bulkResult(r); return refresh("roster"); }).catch(() => {}); }
     else if (a === "roster-csv") downloadCsv("수강생명단", [["학번", "이름", "학과", "이메일"], ...getRoster().map((r) => [r.studentId, r.name, r.department, r.email])]);
     // 신청 내역
     else if (a === "app-del") {
       const apps = getApps();
       if (!confirm(`${apps[i].name}(${apps[i].studentId}) 님의 신청서를 삭제할까요?`)) return;
+      if (API) { attempt(adminApi(`/api/admin/applications/${apps[i].id}`, { method: "DELETE" })).then(() => refresh("applications")).catch(() => {}); return; }
       apps.splice(i, 1);
       store.write("applications", apps);
       showTab("applications");
@@ -753,11 +860,13 @@
     }
     // 편집기
     else if (a === "ed-save") {
-      saveOverride(draft);
-      ss.set("aiweb:adminReopen", JSON.stringify({ tab: "editor", section: edSection }));
-      draft = null;
-      edDirty = false;
-      location.reload();
+      act.disabled = true;
+      attempt(saveOverride(draft)).then(() => {
+        ss.set("aiweb:adminReopen", JSON.stringify({ tab: "editor", section: edSection }));
+        draft = null;
+        edDirty = false;
+        location.reload();
+      }).catch(() => { act.disabled = false; });
     } else if (a === "ed-discard") {
       if (edDirty && !confirm("고친 내용을 모두 취소할까요?")) return;
       draft = clone(C);
@@ -786,18 +895,20 @@
       download("config.js", text, "text/javascript;charset=utf-8");
       toast("config.js를 내려받았어요.", "success");
     } else if (a === "import-apply" && pendingImport) {
-      saveOverride(pendingImport);
-      pendingImport = null;
-      ss.set("aiweb:adminReopen", JSON.stringify({ tab: "files" }));
-      location.reload();
+      attempt(saveOverride(pendingImport)).then(() => {
+        pendingImport = null;
+        ss.set("aiweb:adminReopen", JSON.stringify({ tab: "files" }));
+        location.reload();
+      }).catch(() => {});
     } else if (a === "import-cancel") {
       pendingImport = null;
       $(".import-preview", panel).innerHTML = "";
     } else if (a === "reset") {
-      if (!confirm("이 브라우저에서 고친 설정을 지우고 config.js 원본으로 되돌릴까요?")) return;
-      store.remove("configOverride");
-      ss.set("aiweb:adminReopen", JSON.stringify({ tab: "files" }));
-      location.reload();
+      if (!confirm(`${API ? "관리자 화면에서" : "이 브라우저에서"} 고친 설정(공지·주차 수정 포함)을 지우고 config.js 원본으로 되돌릴까요?`)) return;
+      attempt(clearOverride()).then(() => {
+        ss.set("aiweb:adminReopen", JSON.stringify({ tab: "files" }));
+        location.reload();
+      }).catch(() => {});
     }
   }
 
@@ -834,8 +945,8 @@
     reader.onload = () => {
       const text = String(reader.result || "");
       if (kind === "roster") {
-        bulkResult(addToRoster(parseCsvLines(text).map((c) => ({ studentId: c[0], name: c[1], department: c[2], email: c[3] }))));
-        showTab("roster");
+        addPeople(parseCsvLines(text).map((c) => ({ studentId: c[0], name: c[1], department: c[2], email: c[3] })))
+          .then((r) => { bulkResult(r); return refresh("roster"); }).catch(() => {});
       } else if (kind === "config") {
         const box = $(".import-preview", panel);
         try {
@@ -875,24 +986,28 @@
       const items = [...(C.notices || [])];
       if (editingNotice != null) items[editingNotice] = item; else items.unshift(item);
       const wasEdit = editingNotice != null;
-      editingNotice = null;
-      saveNotices(items);
-      showTab("notices");
-      toast(wasEdit ? "공지를 수정했어요." : "공지를 올렸어요! 사이트 맨 위에서 확인할 수 있어요.", "success");
+      saveNotices(items).then(() => {
+        editingNotice = null;
+        showTab("notices");
+        toast(wasEdit ? "공지를 수정했어요." : "공지를 올렸어요! 사이트 맨 위에서 확인할 수 있어요.", "success");
+      }).catch(() => {});
     } else if (kind === "roster-one") {
       const id = val("studentId"), name = val("name");
       if (!/^\d{10}$/.test(id)) { err.textContent = "학번은 숫자 10자리로 입력해 주세요."; form.elements.namedItem("studentId").focus(); return; }
       if (!name) { err.textContent = "이름을 입력해 주세요."; form.elements.namedItem("name").focus(); return; }
-      const r = addToRoster([{ studentId: id, name, department: val("department"), email: val("email") }]);
-      if (r.dup) { err.textContent = "이미 명단에 있는 학번이에요."; return; }
-      showTab("roster");
-      toast(`${name} 님을 명단에 추가했어요.`, "success");
-      $("#rs-id", panel).focus();
+      addPeople([{ studentId: id, name, department: val("department"), email: val("email") }]).then((r) => {
+        if (r.dup) { err.textContent = "이미 명단에 있는 학번이에요."; return; }
+        return refresh("roster").then(() => {
+          toast(`${name} 님을 명단에 추가했어요.`, "success");
+          const input = $("#rs-id", panel);
+          if (input) input.focus();
+        });
+      }).catch(() => {});
     } else if (kind === "roster-bulk") {
       const lines = parseCsvLines(val("bulk"));
       if (!lines.length) { toast("붙여 넣은 내용이 없거나 형식이 맞지 않아요.", "warn"); return; }
-      bulkResult(addToRoster(lines.map((c) => ({ studentId: c[0], name: c[1], department: c[2], email: c[3] }))));
-      showTab("roster");
+      addPeople(lines.map((c) => ({ studentId: c[0], name: c[1], department: c[2], email: c[3] })))
+        .then((r) => { bulkResult(r); return refresh("roster"); }).catch(() => {});
     } else if (kind === "password") {
       const cur = form.elements.namedItem("cur").value;
       const next = form.elements.namedItem("next").value;
@@ -903,18 +1018,235 @@
       if (next !== next2) { err.textContent = "새 비밀번호 확인이 일치하지 않아요."; return; }
       const salt = randomSalt();
       const iterations = 20000;
+      const before = C.admin;
       C.admin = { salt, iterations, passwordHash: hashPassword(next, salt, iterations) };
-      saveOverride(clone(C));
-      window.SITE_CONFIG_OVERRIDDEN = true;
-      form.reset();
-      err.textContent = "";
-      toast("비밀번호를 바꿨어요. 배포본에 적용하려면 설정 파일을 내려받아 교체하세요.", "success");
+      attempt(saveOverride(clone(C))).then(() => {
+        window.SITE_CONFIG_OVERRIDDEN = true;
+        form.reset();
+        err.textContent = "";
+        toast(API ? "비밀번호를 바꿨어요. 다음 로그인부터 새 비밀번호를 쓰세요." : "비밀번호를 바꿨어요. 배포본에 적용하려면 설정 파일을 내려받아 교체하세요.", "success");
+      }).catch(() => { C.admin = before; });
     }
   }
+
+  /* =====================================================================
+   *  커리큘럼 주차 편집 (관리자로 로그인하면 커리큘럼에 버튼이 나타남)
+   * ===================================================================== */
+  const weekCfg = () => (C.curriculum && C.curriculum.weeks) || [];
+  const saveWeeksAndReload = (weeksArr, openNo, okMsg) => {
+    const cfg = clone(C);
+    cfg.curriculum.weeks = weeksArr;
+    return attempt(saveOverride(cfg)).then(() => {
+      ss.set("aiweb:openWeek", String(openNo || ""));
+      if (okMsg) ss.set("aiweb:afterReloadToast", okMsg);
+      location.reload();
+    });
+  };
+
+  const decorateCurriculum = () => {
+    $$(".week-admin, .week-add-btn").forEach((el) => el.remove());
+    if (!isAdmin()) return;
+    const toolbar = $("#curriculum .week-toolbar");
+    if (toolbar) toolbar.insertAdjacentHTML("beforeend", `<button type="button" class="btn btn-sm week-add-btn" data-week-admin="add">+ 주차 추가</button>`);
+    const n = weekCfg().length;
+    $$("#curriculum .week-item").forEach((item) => {
+      const no = Number(item.id.replace("week-", ""));
+      const inner = $(".week-body-inner", item);
+      if (!inner) return;
+      inner.insertAdjacentHTML("afterbegin", `<div class="week-admin" role="group" aria-label="${no}주 관리">
+        <span class="week-admin-label">관리자</span>
+        <button type="button" class="text-btn sm" data-week-admin="edit" data-no="${no}">✏️ 이 주차 수정</button>
+        <button type="button" class="icon-btn" data-week-admin="up" data-no="${no}" ${no === 1 ? "disabled" : ""} aria-label="${no}주를 앞으로">↑</button>
+        <button type="button" class="icon-btn" data-week-admin="down" data-no="${no}" ${no === n ? "disabled" : ""} aria-label="${no}주를 뒤로">↓</button>
+        <button type="button" class="text-btn sm danger" data-week-admin="del" data-no="${no}">🗑 삭제</button>
+      </div>`);
+    });
+  };
+
+  // 주소 확인 결과 문구
+  const urlStatus = (kind, url) => {
+    const u = String(url || "").trim();
+    if (!u) return { cls: "", text: "" };
+    if (!/^https?:\/\//i.test(u)) return { cls: "bad", text: "http:// 또는 https:// 로 시작하는 주소를 넣어 주세요." };
+    if (kind === "video") {
+      const y = S.youtubeInfo(u);
+      return y ? { cls: "ok", text: `▶ 유튜브 영상으로 인식했어요${y.start ? ` (${y.start}초부터 재생)` : ""} — 페이지 안에서 바로 재생돼요.`, thumb: y.id } : { cls: "", text: "유튜브 주소가 아니라서 링크로 보여 줘요." };
+    }
+    const d = S.driveInfo(u);
+    const names = { file: "드라이브 파일", folder: "드라이브 폴더", doc: "구글 문서", sheet: "구글 시트", slides: "구글 슬라이드", form: "구글 설문" };
+    return d ? { cls: "ok", text: `✓ ${names[d.kind]}(으)로 인식했어요 — 미리보기 가능 (공유: '링크가 있는 모든 사용자')` } : { cls: "", text: "구글 드라이브 주소가 아니라서 링크로 보여 줘요." };
+  };
+  const rowHtml = (kind, item = {}, idx = 0) => {
+    const st = urlStatus(kind, item.url);
+    const ph = kind === "video" ? "https://www.youtube.com/watch?v=..." : "https://drive.google.com/file/d/.../view";
+    return `<div class="we-row" data-kind="${kind}">
+      <div class="we-row-fields">
+        <input class="we-title" placeholder="${kind === "video" ? "영상 제목" : "자료 이름"}" value="${esc(item.title || "")}" aria-label="${kind === "video" ? "영상" : "자료"} ${idx + 1} 제목" />
+        <input class="we-url" type="url" inputmode="url" placeholder="${ph}" value="${esc(item.url || "")}" aria-label="${kind === "video" ? "영상" : "자료"} ${idx + 1} 주소" />
+        <button type="button" class="icon-btn danger" data-we="remove" aria-label="이 줄 삭제">✕</button>
+      </div>
+      <p class="we-status ${st.cls}">${st.thumb ? `<img src="https://i.ytimg.com/vi/${esc(st.thumb)}/default.jpg" alt="" />` : ""}<span>${esc(st.text)}</span></p>
+    </div>`;
+  };
+
+  const openWeekEditor = (no) => {
+    if ($(".modal-backdrop")) return;
+    const isNew = !no;
+    const w = isNew ? { title: "", summary: "", topics: [], videos: [], materials: [] } : clone(weekCfg()[no - 1] || {});
+    const sch = C.schedule || {};
+    const a = w.assignment || {};
+    const label = isNew ? `${weekCfg().length + 1}주 (새 주차)` : `${no}주`;
+    const wrap = document.createElement("div");
+    wrap.className = "modal-backdrop";
+    wrap.innerHTML = `
+      <div class="modal week-editor" role="dialog" aria-modal="true" aria-labelledby="we-title">
+        <button class="modal-x" data-we="close" aria-label="닫기">×</button>
+        <h3 id="we-title">${esc(label)} ${isNew ? "추가" : "수정"}</h3>
+        <form class="we-form" novalidate>
+          <div class="we-grid">
+            <div class="field full"><label for="we-t">제목 <span class="req">*</span></label><input id="we-t" name="title" value="${esc(w.title || "")}" /></div>
+            <div class="field full"><label for="we-s">한 줄 요약</label><input id="we-s" name="summary" value="${esc(w.summary || "")}" /></div>
+            <div class="field"><label for="we-d">날짜 직접 지정</label><input id="we-d" name="date" type="date" value="${esc(w.date || "")}" /><small class="we-help">비우면 매주 자동으로 정해져요.</small></div>
+            <div class="field"><label for="we-l">장소</label><input id="we-l" name="location" placeholder="${esc(sch.location || "")}" value="${esc(w.location || "")}" /><small class="we-help">비우면 기본 장소</small></div>
+            <div class="field"><label for="we-st">시작 시각</label><input id="we-st" name="startTime" type="time" value="${esc(w.startTime || "")}" placeholder="${esc(sch.startTime || "")}" /><small class="we-help">비우면 ${esc(sch.startTime || "")}</small></div>
+            <div class="field"><label for="we-et">종료 시각</label><input id="we-et" name="endTime" type="time" value="${esc(w.endTime || "")}" /><small class="we-help">비우면 ${esc(sch.endTime || "")}</small></div>
+            <div class="field full"><label for="we-tp">학습 내용</label><textarea id="we-tp" name="topics" rows="4" placeholder="한 줄에 하나씩 적어 주세요">${esc((w.topics || []).join("\n"))}</textarea></div>
+          </div>
+
+          <fieldset class="we-set">
+            <legend>📁 강의 자료 (구글 드라이브)</legend>
+            <p class="we-help">구글 드라이브·문서·시트·슬라이드 주소를 넣으면 '미리보기'로 페이지 안에서 볼 수 있어요. 파일 공유 설정을 <b>링크가 있는 모든 사용자</b>로 바꿔 주세요.</p>
+            <div class="we-rows" data-list="materials">${list(w.materials || [], (m, i) => rowHtml("material", m, i))}</div>
+            <button type="button" class="text-btn sm" data-we="add" data-kind="material">+ 자료 추가</button>
+          </fieldset>
+
+          <fieldset class="we-set">
+            <legend>▶ 참고 영상 (유튜브)</legend>
+            <p class="we-help">유튜브 주소(watch, youtu.be, shorts 모두 가능)를 넣으면 페이지 안에서 바로 재생돼요. <code>&t=90</code>처럼 시작 시간도 지정할 수 있어요.</p>
+            <div class="we-rows" data-list="videos">${list(w.videos || [], (v, i) => rowHtml("video", v, i))}</div>
+            <button type="button" class="text-btn sm" data-we="add" data-kind="video">+ 영상 추가</button>
+          </fieldset>
+
+          <fieldset class="we-set">
+            <legend>📝 과제</legend>
+            <label class="check"><input type="checkbox" name="hasAssignment" ${w.assignment ? "checked" : ""} /><span>이 주차에 과제가 있어요</span></label>
+            <div class="we-assign" ${w.assignment ? "" : "hidden"}>
+              <div class="we-grid">
+                <div class="field full"><label for="we-at">과제 제목</label><input id="we-at" name="aTitle" value="${esc(a.title || "")}" /></div>
+                <div class="field full"><label for="we-ad">과제 설명</label><textarea id="we-ad" name="aDesc" rows="3">${esc(a.description || "")}</textarea></div>
+                <div class="field"><label for="we-an">마감: 수업 후 며칠</label><input id="we-an" name="aDays" type="number" min="0" max="60" value="${esc(a.dueAfterDays == null ? 6 : a.dueAfterDays)}" /></div>
+                <div class="field"><label for="we-atm">마감 시각</label><input id="we-atm" name="aTime" type="time" value="${esc(a.dueTime || "23:59")}" /></div>
+                <div class="field full"><label for="we-adue">마감 일시 직접 지정 (선택)</label><input id="we-adue" name="aDue" type="datetime-local" value="${esc(a.due ? String(a.due).replace(" ", "T") : "")}" /><small class="we-help">넣으면 위의 '수업 후 며칠'보다 우선해요.</small></div>
+              </div>
+            </div>
+          </fieldset>
+          <p class="field-error" data-err role="alert"></p>
+          <div class="we-actions">
+            <button type="button" class="text-btn" data-we="close">취소</button>
+            <button type="submit" class="btn btn-sm">${isNew ? "주차 추가하기" : "저장하기"}</button>
+          </div>
+        </form>
+      </div>`;
+    document.body.appendChild(wrap);
+    document.body.classList.add("modal-open");
+    requestAnimationFrame(() => wrap.classList.add("show"));
+    $("#we-t", wrap).focus();
+
+    const close = () => {
+      wrap.classList.remove("show");
+      document.body.classList.remove("modal-open");
+      document.removeEventListener("keydown", onKey);
+      setTimeout(() => wrap.remove(), 250);
+    };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("keydown", onKey);
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) { close(); return; }
+      const b = e.target.closest("[data-we]");
+      if (!b) return;
+      if (b.dataset.we === "close") close();
+      if (b.dataset.we === "remove") b.closest(".we-row").remove();
+      if (b.dataset.we === "add") {
+        const box = $(`.we-rows[data-list="${b.dataset.kind === "video" ? "videos" : "materials"}"]`, wrap);
+        box.insertAdjacentHTML("beforeend", rowHtml(b.dataset.kind, {}, box.children.length));
+        $(".we-row:last-child .we-title", box).focus();
+      }
+    });
+    wrap.addEventListener("input", (e) => {
+      if (e.target.classList.contains("we-url")) {
+        const row = e.target.closest(".we-row");
+        const st = urlStatus(row.dataset.kind, e.target.value);
+        const p = $(".we-status", row);
+        p.className = `we-status ${st.cls}`;
+        p.innerHTML = `${st.thumb ? `<img src="https://i.ytimg.com/vi/${esc(st.thumb)}/default.jpg" alt="" />` : ""}<span>${esc(st.text)}</span>`;
+      }
+    });
+    wrap.addEventListener("change", (e) => {
+      if (e.target.name === "hasAssignment") $(".we-assign", wrap).hidden = !e.target.checked;
+    });
+    $(".we-form", wrap).addEventListener("submit", (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const v = (n) => String(f.elements.namedItem(n).value || "").trim();
+      const err = $("[data-err]", f);
+      if (!v("title")) { err.textContent = "제목을 입력해 주세요."; $("#we-t", wrap).focus(); return; }
+      const rows = (name) => $$(`.we-rows[data-list="${name}"] .we-row`, wrap)
+        .map((r) => ({ title: $(".we-title", r).value.trim(), url: $(".we-url", r).value.trim() }))
+        .filter((r) => r.url || r.title);
+      const materials = rows("materials");
+      const videos = rows("videos");
+      const badRow = [...materials, ...videos].find((r) => !/^https?:\/\//i.test(r.url));
+      if (badRow) { err.textContent = `'${badRow.title || "제목 없는 항목"}'의 주소를 확인해 주세요. (https://로 시작해야 해요)`; return; }
+      const next = { ...w, title: v("title"), summary: v("summary"), topics: v("topics").split("\n").map((t) => t.trim()).filter(Boolean), materials, videos };
+      ["date", "location", "startTime", "endTime"].forEach((k) => { if (v(k)) next[k] = v(k); else delete next[k]; });
+      if (f.elements.namedItem("hasAssignment").checked) {
+        if (!v("aTitle")) { err.textContent = "과제 제목을 입력해 주세요."; $("#we-at", wrap).focus(); return; }
+        const asg = { ...(w.assignment || {}), title: v("aTitle"), description: v("aDesc"), dueAfterDays: Number(v("aDays")) || 0, dueTime: v("aTime") || "23:59" };
+        if (v("aDue")) asg.due = v("aDue").replace("T", " "); else delete asg.due;
+        next.assignment = asg;
+      } else delete next.assignment;
+      const arr = clone(weekCfg());
+      if (isNew) arr.push(next); else arr[no - 1] = next;
+      const btn = $("button[type=submit]", f);
+      btn.disabled = true;
+      saveWeeksAndReload(arr, isNew ? arr.length : no, isNew ? `${arr.length}주를 추가했어요.` : `${no}주를 저장했어요.`)
+        .catch(() => { btn.disabled = false; });
+    });
+  };
+
+  // 커리큘럼 안의 관리자 버튼
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-week-admin]");
+    if (!b || !isAdmin()) return;
+    const no = Number(b.dataset.no);
+    const act = b.dataset.weekAdmin;
+    const arr = clone(weekCfg());
+    if (act === "add") openWeekEditor(0);
+    else if (act === "edit") openWeekEditor(no);
+    else if (act === "del") {
+      if (!confirm(`${no}주 '${arr[no - 1].title}'을(를) 삭제할까요? 뒤 주차들이 한 주씩 앞당겨져요.`)) return;
+      arr.splice(no - 1, 1);
+      saveWeeksAndReload(arr, Math.min(no, arr.length), `${no}주를 삭제했어요.`).catch(() => {});
+    } else if (act === "up" || act === "down") {
+      const j = act === "up" ? no - 2 : no;
+      if (j < 0 || j >= arr.length) return;
+      [arr[no - 1], arr[j]] = [arr[j], arr[no - 1]];
+      saveWeeksAndReload(arr, j + 1, "주차 순서를 바꿨어요.").catch(() => {});
+    }
+  });
+  window.addEventListener("aiweb:admin-change", decorateCurriculum);
 
   /* ----- 시작 ----- */
   lockBtn.addEventListener("click", () => (isAdmin() ? openPanel(currentTab) : openLogin()));
   syncLock();
+  decorateCurriculum();
+  // 주차를 고친 뒤 다시 불러왔다면 그 주차를 펼쳐서 보여 줌
+  const reopenWeek = Number(ss.get("aiweb:openWeek"));
+  const afterToast = ss.get("aiweb:afterReloadToast");
+  ss.del("aiweb:openWeek");
+  ss.del("aiweb:afterReloadToast");
+  if (reopenWeek) setTimeout(() => S.openWeek(reopenWeek), 300);
+  if (afterToast) toast(afterToast, "success");
   const reopen = ss.get("aiweb:adminReopen");
   if (reopen && isAdmin()) {
     ss.del("aiweb:adminReopen");

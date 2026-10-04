@@ -2,17 +2,24 @@
 (function () {
   "use strict";
 
-  // 관리자 화면에서 고친 설정(브라우저에 저장된 수정본)이 있으면 config.js 대신 사용
+  // 관리자가 고친 설정이 있으면 config.js 대신 사용
+  //  - 서버 모드(Railway): DB에 저장된 설정 (site-data.js가 넣어 줌) → 모든 방문자에게 동일
+  //  - 데모 모드(파일로 열기 등): 이 브라우저에 저장된 수정본
+  const SERVER_MODE = !!(window.SITE_API && window.SITE_API.enabled);
   if (window.SITE_CONFIG) {
     window.SITE_CONFIG_DEFAULT = JSON.parse(JSON.stringify(window.SITE_CONFIG));
-    try {
-      const saved = localStorage.getItem("aiweb:configOverride");
-      const parsed = saved ? JSON.parse(saved) : null;
-      if (parsed && typeof parsed === "object" && parsed.site) {
-        window.SITE_CONFIG = parsed;
-        window.SITE_CONFIG_OVERRIDDEN = true;
-      }
-    } catch (e) { /* 수정본을 못 읽으면 config.js 사용 */ }
+    let parsed = null;
+    if (SERVER_MODE) parsed = window.SITE_CONFIG_OVERRIDE || null;
+    else {
+      try {
+        const saved = localStorage.getItem("aiweb:configOverride");
+        parsed = saved ? JSON.parse(saved) : null;
+      } catch (e) { /* 수정본을 못 읽으면 config.js 사용 */ }
+    }
+    if (parsed && typeof parsed === "object" && parsed.site) {
+      window.SITE_CONFIG = parsed;
+      window.SITE_CONFIG_OVERRIDDEN = true;
+    }
   }
   const C = window.SITE_CONFIG;
   if (!C) {
@@ -246,6 +253,101 @@
   const timeRange = (w) => `${esc(w.startTime)} – ${esc(w.endTime)}`;
 
   // 과제 블록 (커리큘럼과 달력 상세에서 함께 사용)
+  /* ----- 유튜브 · 구글 드라이브 주소 해석 ----- */
+  // "1m30s", "90", "1h2m3s" → 초
+  const parseStart = (t) => {
+    if (!t) return 0;
+    if (/^\d+$/.test(t)) return Number(t);
+    const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(t);
+    return m ? (Number(m[1]) || 0) * 3600 + (Number(m[2]) || 0) * 60 + (Number(m[3]) || 0) : 0;
+  };
+  // 유튜브 주소 → { id, start } (watch, youtu.be, shorts, embed, live 모두 지원)
+  const youtubeInfo = (url) => {
+    try {
+      const u = new URL(String(url || "").trim());
+      const host = u.hostname.replace(/^(www|m|music)\./, "");
+      let id = "";
+      if (host === "youtu.be") id = u.pathname.slice(1);
+      else if (host === "youtube.com" || host === "youtube-nocookie.com") {
+        if (u.pathname === "/watch") id = u.searchParams.get("v") || "";
+        else {
+          const m = /^\/(?:embed|shorts|live|v)\/([\w-]{11})/.exec(u.pathname);
+          if (m) id = m[1];
+        }
+      }
+      id = (/^[\w-]{11}/.exec(id) || [""])[0];
+      return id ? { id, start: parseStart(u.searchParams.get("t") || u.searchParams.get("start") || "") } : null;
+    } catch (e) { return null; }
+  };
+  // 구글 드라이브 · 문서 주소 → { kind, preview } (공유 설정이 '링크가 있는 모든 사용자'여야 미리보기 가능)
+  const driveInfo = (url) => {
+    try {
+      const u = new URL(String(url || "").trim());
+      if (u.hostname === "drive.google.com") {
+        let m = /\/file\/d\/([\w-]+)/.exec(u.pathname);
+        if (m) return { kind: "file", preview: `https://drive.google.com/file/d/${m[1]}/preview` };
+        m = /\/folders\/([\w-]+)/.exec(u.pathname);
+        if (m) return { kind: "folder", preview: `https://drive.google.com/embeddedfolderview?id=${m[1]}#list` };
+        const id = u.searchParams.get("id");
+        if (id && /^[\w-]+$/.test(id)) return { kind: "file", preview: `https://drive.google.com/file/d/${id}/preview` };
+      }
+      if (u.hostname === "docs.google.com") {
+        const m = /^\/(document|spreadsheets|presentation|forms)\/d\/([\w-]+)/.exec(u.pathname);
+        if (m) {
+          const kind = { document: "doc", spreadsheets: "sheet", presentation: "slides", forms: "form" }[m[1]];
+          const preview = m[1] === "forms"
+            ? `https://docs.google.com/forms/d/${m[2]}/viewform?embedded=true`
+            : `https://docs.google.com/${m[1]}/d/${m[2]}/preview`;
+          return { kind, preview };
+        }
+      }
+    } catch (e) { /* 주소 형식 아님 */ }
+    return null;
+  };
+  const safeUrl = (url) => (/^https?:\/\//i.test(String(url || "").trim()) ? String(url).trim() : "");
+  const DRIVE_ICON = { file: "📎", folder: "📁", doc: "📄", sheet: "📊", slides: "📽️", form: "📝" };
+  const DRIVE_LABEL = { file: "드라이브 파일", folder: "드라이브 폴더", doc: "구글 문서", sheet: "구글 시트", slides: "구글 슬라이드", form: "구글 설문" };
+
+  // 강의 자료 (구글 드라이브)
+  const materialsHtml = (w) => {
+    const items = (w.materials || []).filter((m) => safeUrl(m.url));
+    if (!items.length) return "";
+    return `<h4 class="week-h4">강의 자료</h4><ul class="material-list">${list(items, (m, i) => {
+      const d = driveInfo(m.url);
+      const url = safeUrl(m.url);
+      return `<li class="material">
+        <div class="material-row">
+          <span class="material-icon" aria-hidden="true">${d ? DRIVE_ICON[d.kind] : "🔗"}</span>
+          <div class="material-text"><b>${esc(m.title || (d ? DRIVE_LABEL[d.kind] : "자료"))}</b><small>${d ? DRIVE_LABEL[d.kind] : "외부 링크"}</small></div>
+          ${d ? `<button type="button" class="text-btn sm" data-preview="${esc(d.preview)}" aria-expanded="false" aria-controls="mat-${w.no}-${i}">미리보기</button>` : ""}
+          <a class="text-btn sm" href="${esc(url)}" target="_blank" rel="noopener">열기 ↗</a>
+        </div>
+        ${d ? `<div class="material-preview" id="mat-${w.no}-${i}" hidden></div>` : ""}
+      </li>`;
+    })}</ul>`;
+  };
+
+  // 참고 영상: 유튜브는 썸네일을 누르면 그 자리에서 재생, 그 밖의 주소는 링크
+  const videosHtml = (w) => {
+    const items = (w.videos || []).filter((v) => safeUrl(v.url));
+    if (!items.length) return "";
+    const yt = items.map((v) => ({ v, info: youtubeInfo(v.url) }));
+    const embeds = yt.filter((x) => x.info);
+    const links = yt.filter((x) => !x.info);
+    return `<h4 class="week-h4">참고 영상</h4>
+      ${embeds.length ? `<div class="video-grid">${list(embeds, ({ v, info }) => `<figure class="video-embed">
+          <div class="video-frame" data-yt="${esc(info.id)}" data-start="${info.start}">
+            <button type="button" class="video-poster" aria-label="영상 재생: ${esc(v.title || "참고 영상")}">
+              <img src="https://i.ytimg.com/vi/${esc(info.id)}/hqdefault.jpg" alt="" loading="lazy" />
+              <span class="play-big" aria-hidden="true">▶</span>
+            </button>
+          </div>
+          <figcaption>${esc(v.title || "참고 영상")}</figcaption>
+        </figure>`)}</div>` : ""}
+      ${links.length ? `<ul class="video-list">${list(links, ({ v }) =>
+        `<li><a href="${esc(safeUrl(v.url))}" target="_blank" rel="noopener"><span class="play" aria-hidden="true">▶</span>${esc(v.title || v.url)}</a></li>`)}</ul>` : ""}`;
+  };
+
   const assignmentHtml = (w) => {
     const a = w.assignment;
     if (!a) return "";
@@ -296,10 +398,8 @@
               <div><dt>📍 장소</dt><dd>${esc(w.location)}</dd></div>
             </dl>
             ${w.topics && w.topics.length ? `<h4 class="week-h4">학습 내용</h4><ul class="topic-list">${list(w.topics, (t) => `<li>${esc(t)}</li>`)}</ul>` : ""}
-            ${w.videos && w.videos.length ? `<h4 class="week-h4">참고 영상</h4><ul class="video-list">${list(
-              w.videos,
-              (v) => `<li><a href="${esc(v.url)}" target="_blank" rel="noopener"><span class="play" aria-hidden="true">▶</span>${esc(v.title)}</a></li>`
-            )}</ul>` : ""}
+            ${materialsHtml(w)}
+            ${videosHtml(w)}
             ${assignmentHtml(w)}
           </div></div>
         </div>
@@ -322,6 +422,43 @@
       const item = head.parentElement;
       setWeekOpen(item, !item.classList.contains("open"));
       syncToggleAll();
+      return;
+    }
+    // 유튜브 썸네일 → 그 자리에서 재생 (youtube-nocookie 임베드)
+    const poster = ev.target.closest(".video-poster");
+    if (poster) {
+      const frame = poster.parentElement;
+      const start = Number(frame.dataset.start) || 0;
+      const iframe = document.createElement("iframe");
+      iframe.src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(frame.dataset.yt)}?autoplay=1&rel=0${start ? `&start=${start}` : ""}`;
+      iframe.title = poster.getAttribute("aria-label") || "유튜브 영상";
+      iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+      iframe.referrerPolicy = "strict-origin-when-cross-origin";
+      iframe.allowFullscreen = true;
+      frame.replaceChildren(iframe);
+      iframe.focus();
+      return;
+    }
+    // 구글 드라이브 미리보기 열고 닫기
+    const prev = ev.target.closest("[data-preview]");
+    if (prev) {
+      const box = document.getElementById(prev.getAttribute("aria-controls"));
+      const open = prev.getAttribute("aria-expanded") !== "true";
+      if (open && !box.firstChild) {
+        const iframe = document.createElement("iframe");
+        iframe.src = prev.dataset.preview;
+        iframe.title = "강의 자료 미리보기";
+        iframe.loading = "lazy";
+        iframe.allow = "autoplay";
+        box.appendChild(iframe);
+        const note = document.createElement("p");
+        note.className = "material-note";
+        note.textContent = "미리보기가 보이지 않으면 '열기'를 누르세요. (자료 공유 설정이 '링크가 있는 모든 사용자'여야 보입니다)";
+        box.appendChild(note);
+      }
+      box.hidden = !open;
+      prev.setAttribute("aria-expanded", String(open));
+      prev.textContent = open ? "미리보기 닫기" : "미리보기";
     }
   });
   toggleAllBtn.addEventListener("click", () => {
@@ -753,5 +890,6 @@
     C, $, $$, esc, list, sectionHead, reduceMotion,
     WD, pad, parseDate, parseDateTime, withTime, addDays, startOfDay, ymd, fmtDate, fmtTime,
     now, weeks, remaining, updateCountdowns, openWeek, observeReveal, renderNotices,
+    SERVER_MODE, youtubeInfo, driveInfo,
   };
 })();

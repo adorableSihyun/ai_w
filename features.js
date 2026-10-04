@@ -12,9 +12,12 @@
    *  여러 학생이 실제로 공유하려면 read / write / on 세 함수만
    *  Firebase 등 서버 저장소로 바꾸면 나머지 코드는 그대로 동작합니다.
    * ===================================================================== */
+  const API = !!S.SERVER_MODE;
   const store = (() => {
     const PREFIX = "aiweb:";
     const mem = new Map();
+    // 서버 모드에서는 여럿이 함께 쓰는 데이터를 서버(DB)가 가지고 있으므로 브라우저에는 저장하지 않음 (메모리 캐시만)
+    const memOnly = (key) => API && /^(poll:[^:]+$|applications$|roster$|knownStudents$|attendance:|submissions:)/.test(key);
     const listeners = new Map();
     let ls = null;
     try {
@@ -26,7 +29,7 @@
     }
     const read = (key, fallback) => {
       try {
-        if (ls) {
+        if (ls && !memOnly(key)) {
           const raw = ls.getItem(PREFIX + key);
           if (raw != null) return JSON.parse(raw);
         }
@@ -41,8 +44,9 @@
     } catch (e) { channel = null; }
     const write = (key, value) => {
       mem.set(key, value);
-      try { if (ls) ls.setItem(PREFIX + key, JSON.stringify(value)); } catch (e) { /* 용량 초과 등 */ }
       emit(key);
+      if (memOnly(key)) return;
+      try { if (ls) ls.setItem(PREFIX + key, JSON.stringify(value)); } catch (e) { /* 용량 초과 등 */ }
       if (channel) channel.postMessage(key); // 같은 브라우저의 다른 탭에 실시간 반영
     };
     const remove = (key) => {
@@ -71,6 +75,22 @@
     };
     return { read, write, remove, on, keys };
   })();
+
+  // 서버 API 호출 (실패하면 서버가 보낸 한국어 오류 문구로 예외)
+  const api = async (path, { method = "GET", body, raw, headers = {} } = {}) => {
+    const opts = { method, headers: { ...headers } };
+    if (raw !== undefined) opts.body = raw;
+    else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers["Content-Type"] = "application/json"; }
+    let res;
+    try { res = await fetch(path, opts); } catch (e) { throw new Error("서버에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요."); }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(data.error || `요청을 처리하지 못했어요. (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  };
 
   /* ----- 공통 도우미 ----- */
   const josa = (word, withBatchim, without) => {
@@ -109,7 +129,7 @@
   const stu = C.student || {};
   $("#participate").innerHTML =
     sectionHead(P.title || "참여하기", P.subtitle, P.eyebrow || "Join us") +
-    (P.demoNotice ? `<p class="demo-notice reveal"><span aria-hidden="true">🧪</span>${esc(P.demoNotice)}</p>` : "") +
+    (P.demoNotice && !API ? `<p class="demo-notice reveal"><span aria-hidden="true">🧪</span>${esc(P.demoNotice)}</p>` : "") +
     `<div class="card poll reveal" id="poll">
       <div class="poll-head">
         <span class="live-badge"><i aria-hidden="true"></i>실시간 투표</span>
@@ -133,6 +153,15 @@
   const pollKey = `poll:${poll.id || "default"}`;
   const pollMineKey = `${pollKey}:mine`;
   let pollChoice = null;
+  // 이 브라우저를 구분하는 무작위 값 (서버에서 한 사람 한 표로 셈)
+  const voterId = () => {
+    let id = store.read("voterId", null);
+    if (!id) {
+      id = `v-${Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+      store.write("voterId", id);
+    }
+    return id;
+  };
 
   const pollCounts = () => {
     const local = store.read(pollKey, {}) || {};
@@ -187,8 +216,23 @@
     }
     const act = e.target.closest("[data-poll]");
     if (!act) return;
-    const local = { ...(store.read(pollKey, {}) || {}) };
     const mine = store.read(pollMineKey, null);
+    if (API) {
+      // 서버 모드: 브라우저마다 한 표 (다시 투표하면 표가 옮겨짐)
+      const isVote = act.dataset.poll === "vote" && pollChoice && !mine;
+      if (!isVote && !(act.dataset.poll === "revote" && mine)) return;
+      act.disabled = true;
+      api(`/api/poll/${encodeURIComponent(poll.id || "default")}/vote`, {
+        method: isVote ? "POST" : "DELETE",
+        body: { voter: voterId(), optionId: pollChoice },
+      }).then((d) => {
+        store.write(pollKey, d.counts);
+        if (isVote) { store.write(pollMineKey, pollChoice); toast("투표해 주셔서 고마워요! 🌿", "success"); }
+        else { pollChoice = mine; store.remove(pollMineKey); }
+      }).catch((err) => { toast(err.message, "warn"); renderPoll(); });
+      return;
+    }
+    const local = { ...(store.read(pollKey, {}) || {}) };
     if (act.dataset.poll === "vote" && pollChoice && !mine) {
       local[pollChoice] = (Number(local[pollChoice]) || 0) + 1;
       store.write(pollKey, local);
@@ -214,6 +258,18 @@
   store.on(pollKey, renderPoll);
   store.on(pollMineKey, () => { pollChoice = store.read(pollMineKey, null) || pollChoice; renderPoll(); });
   renderPoll();
+  if (API) {
+    // 서버의 최신 투표 결과를 10초마다 가져와 실시간처럼 보여 줌
+    const refreshPoll = () => {
+      if (document.hidden) return;
+      api(`/api/poll/${encodeURIComponent(poll.id || "default")}`)
+        .then((d) => store.write(pollKey, d.counts))
+        .catch(() => { /* 잠깐 끊겨도 다음 주기에 다시 시도 */ });
+    };
+    refreshPoll();
+    setInterval(refreshPoll, 10000);
+    document.addEventListener("visibilitychange", refreshPoll);
+  }
 
   /* ----- 학생 공간: 로그인 · 출석 · 과제 제출 ----- */
   const att = stu.attendance || {};
@@ -391,7 +447,7 @@
             </label>
             <p class="field-error" id="submit-file-err"></p>
             <button class="btn" type="submit">${prev ? "다시 제출하기" : "제출하기"}</button>`}
-        ${sub.demoNote ? `<p class="submit-note">${esc(sub.demoNote)}</p>` : ""}
+        ${sub.demoNote && !API ? `<p class="submit-note">${esc(sub.demoNote)}</p>` : ""}
       </form>`;
     chosenFile = null;
     S.updateCountdowns(area);
@@ -451,6 +507,25 @@
         (idErr ? idEl : nameEl).focus();
         return;
       }
+      if (API) {
+        // 서버 모드: 명단 확인과 기록 불러오기를 서버가 처리
+        const btn = form.querySelector("button[type=submit]");
+        btn.disabled = true;
+        api("/api/student/login", { method: "POST", body: { studentId: id, name } })
+          .then((rec) => {
+            store.write(attKey(id), rec.attendance || {});
+            store.write(subKey(id), rec.submissions || {});
+            store.write("session", { studentId: id, name, loginAt: Date.now() });
+            toast(`${name} 님, 로그인되었어요.`, "success");
+          })
+          .catch((err) => {
+            btn.disabled = false;
+            $("#login-id-err").textContent = err.message;
+            idEl.setAttribute("aria-invalid", "true");
+            idEl.focus();
+          });
+        return;
+      }
       // 관리자가 수강생 명단을 등록했다면 명단에 있는 학생만 로그인
       const roster = store.read("roster", []) || [];
       if (roster.length && !roster.some((r) => String(r.studentId) === id && String(r.name).trim() === name)) {
@@ -477,6 +552,31 @@
         $("#submit-file").focus();
         return;
       }
+      if (API) {
+        // 서버 모드: 파일 본문을 그대로 올려 DB에 저장
+        const btn = form.querySelector("button[type=submit]");
+        btn.disabled = true;
+        btn.textContent = "올리는 중…";
+        const q = new URLSearchParams({ studentId: me.studentId, name: me.name, week: String(wNo) });
+        api(`/api/submissions?${q}`, {
+          method: "POST",
+          raw: chosenFile,
+          headers: { "X-File-Name": encodeURIComponent(chosenFile.name), "Content-Type": chosenFile.type || "application/octet-stream" },
+        })
+          .then((rec) => {
+            pendingWeek = wNo;
+            store.write(attKey(me.studentId), rec.attendance || {});
+            store.write(subKey(me.studentId), rec.submissions || {});
+            toast(`${w.label} 과제를 제출했어요! 📮`, "success");
+          })
+          .catch((err) => {
+            btn.disabled = false;
+            btn.textContent = "다시 시도";
+            $("#submit-file-err").textContent = err.message;
+            if (err.status === 403) store.remove("session");
+          });
+        return;
+      }
       const subs = { ...(store.read(subKey(me.studentId), {}) || {}) };
       const prev = subs[wNo];
       subs[wNo] = { fileName: chosenFile.name, size: chosenFile.size, time: now().getTime(), count: prev ? (prev.count || 1) + 1 : 1 };
@@ -494,6 +594,20 @@
       toast("로그아웃되었어요.");
     } else if (act.dataset.action === "attend" && me) {
       const cs = classState();
+      if (API) {
+        // 서버 모드: 출석·지각·마감 여부를 서버 시각으로 판단
+        act.disabled = true;
+        api("/api/attendance", { method: "POST", body: { studentId: me.studentId, name: me.name } })
+          .then((rec) => {
+            store.write(attKey(me.studentId), rec.attendance || {});
+            toast(rec.status === "late" ? "지각으로 출석 처리되었어요." : "출석 완료! 오늘도 화이팅 💪", rec.status === "late" ? "warn" : "success");
+          })
+          .catch((err) => {
+            toast(err.message, "warn");
+            if (err.status === 403) store.remove("session"); else renderAttendance();
+          });
+        return;
+      }
       if (cs.state !== "ontime" && cs.state !== "late") { renderAttendance(); return; }
       const rec = { ...(store.read(attKey(me.studentId), {}) || {}) };
       if (rec[cs.week.no]) return;
@@ -555,6 +669,16 @@
   store.on("lastApplicant", () => { if (!session()) renderStudent(); });
   ensureWatch();
   renderStudent();
+  // 서버 모드: 이미 로그인한 상태라면 서버에서 내 기록을 새로 불러옴
+  if (API && session()) {
+    const me = session();
+    api(`/api/student/records?${new URLSearchParams({ studentId: me.studentId, name: me.name })}`)
+      .then((rec) => {
+        store.write(attKey(me.studentId), rec.attendance || {});
+        store.write(subKey(me.studentId), rec.submissions || {});
+      })
+      .catch((err) => { if (err.status === 403) store.remove("session"); });
+  }
   // 출석 가능 시간·남은 시간이 바뀌므로 30초마다 갱신
   setInterval(() => { if (session()) renderAttendance(); }, 30000);
 
@@ -629,7 +753,7 @@
     }
     if (f.pattern && typeof v === "string" && !new RegExp(f.pattern).test(v)) return f.patternMessage || `${f.label} 형식을 확인해 주세요.`;
     if (f.minLength && typeof v === "string" && v.length < f.minLength) return `${f.minLength}자 이상 입력해 주세요. (현재 ${v.length}자)`;
-    if (f.name === "studentId") {
+    if (f.name === "studentId" && !API) { // 서버 모드에서는 서버가 중복을 확인
       const apps = store.read("applications", []) || [];
       if (apps.some((ap) => ap.studentId === v)) return "이미 신청서를 제출한 학번입니다.";
     }
@@ -713,9 +837,26 @@
     }
     const data = {};
     A.fields.forEach((f) => (data[f.name] = valueOf(form, f)));
+    if (API) {
+      const btn = form.querySelector("button[type=submit]");
+      btn.disabled = true;
+      api("/api/applications", { method: "POST", body: { data } })
+        .then((d) => showApplySuccess(data, d.receipt))
+        .catch((err) => {
+          btn.disabled = false;
+          const idField = A.fields.find((f) => f.name === "studentId");
+          if (err.status === 409 && idField) { markField(form, idField, err.message); focusField(form, idField); }
+          else toast(err.message, "warn");
+        });
+      return;
+    }
     const apps = store.read("applications", []) || [];
     const receipt = `AI26-${String(apps.length + 1).padStart(4, "0")}`;
     store.write("applications", [...apps, { ...data, receipt, submittedAt: Date.now() }]);
+    showApplySuccess(data, receipt);
+  });
+
+  function showApplySuccess(data, receipt) {
     if (data.studentId && data.name) store.write("lastApplicant", { studentId: data.studentId, name: data.name });
     applyBody.innerHTML = `
       <div class="apply-success" tabindex="-1">
@@ -737,7 +878,7 @@
     scrollToEl($("#apply"));
     confetti({ bursts: 2, cannons: false });
     toast("수강 신청서가 제출되었어요! 🌿", "success");
-  });
+  }
 
   /* =====================================================================
    *  폭죽 효과 (꽃잎 + 색종이)
@@ -896,5 +1037,5 @@
   S.observeReveal($("#participate"));
   S.observeReveal($("#apply"));
   // 다른 곳에서도 쓸 수 있게 공개 (예: 콘솔에서 SiteFeatures.confetti())
-  window.SiteFeatures = { store, toast, confetti, openPopup };
+  window.SiteFeatures = { store, toast, confetti, openPopup, api, API };
 })();
