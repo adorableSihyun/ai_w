@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>강의 소개</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header" id="top">
+    <div class="header-inner">
+      <a class="brand" href="#top" data-scroll="top">
+        <span class="brand-mark" aria-hidden="true">🌸</span>
+        <span class="brand-text"></span>
+      </a>
+      <button class="menu-toggle" aria-label="메뉴 열기" aria-expanded="false" aria-controls="site-nav">
+        <span></span><span></span><span></span>
+      </button>
+      <nav class="site-nav" id="site-nav"><ul></ul></nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- 첫 화면 -->
+    <section class="hero">
+      <div class="petals" aria-hidden="true"></div>
+      <div class="hero-inner">
+        <div class="hero-card">
+          <span class="hero-badge"></span>
+          <p class="hero-dept"></p>
+          <h1 class="hero-title"></h1>
+          <p class="hero-subtitle"></p>
+          <p class="hero-desc"></p>
+          <div class="hero-buttons"></div>
+        </div>
+        <div class="quick-info grid grid-4"></div>
+      </div>
+    </section>
+
+    <section class="section section-tight" id="stats" aria-label="주요 수치"></section>
+    <section class="section" id="about"></section>
+    <section class="section" id="curriculum"></section>
+    <section class="section" id="tools"></section>
+    <section class="section" id="enroll"></section>
+    <section class="section" id="faq"></section>
+  </main>
+
+  <!-- 교수자 소개 푸터 -->
+  <footer class="site-footer" id="instructor"></footer>
+
+  <button class="to-top" aria-label="맨 위로 이동">↑</button>
+
+  <script src="config.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
