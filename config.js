@@ -13,10 +13,11 @@ window.SITE_CONFIG = {
     courseName: "○○○",                 // 「」 없이 과목명만 입력
   },
 
-  /* ---------- 상단 메뉴 (target은 아래 섹션 id: about / curriculum / tools / enroll / faq / instructor) ---------- */
+  /* ---------- 상단 메뉴 (target은 아래 섹션 id: about / curriculum / calendar / tools / enroll / faq / instructor) ---------- */
   nav: [
     { label: "프로그램 소개", target: "about" },
     { label: "커리큘럼", target: "curriculum" },
+    { label: "수업 달력", target: "calendar" },
     { label: "수강 안내", target: "enroll" },
     { label: "FAQ", target: "faq" },
     { label: "교수자", target: "instructor" },
@@ -36,7 +37,8 @@ window.SITE_CONFIG = {
     ],
     // 첫 화면 아래 한눈에 보기
     quickInfo: [
-      { icon: "📅", label: "일정", value: "2026. 3. 3 – 6. 16 (15주)" },
+      // auto: "schedule" → 아래 수업 일정(schedule)에서 기간을 자동 계산해 표시
+      { icon: "📅", label: "일정", auto: "schedule" },
       { icon: "⏰", label: "시간", value: "매주 화요일 14:00 – 16:45" },
       { icon: "💻", label: "수업 방식", value: "대면 강의 + AI 도구 실습" },
       { icon: "🎓", label: "수강 대상", value: "전 학년 · 타과생 환영 (비전공자 가능)" },
@@ -68,27 +70,170 @@ window.SITE_CONFIG = {
     ],
   },
 
-  /* ---------- 커리큘럼 ---------- */
+  /* ---------- 수업 일정 (주차 날짜와 달력이 여기서 자동 계산됩니다) ----------
+   *  - startDate부터 7일 간격(매주 같은 요일)으로 1주차, 2주차 ... 날짜가 정해집니다.
+   *  - holidays에 있는 날은 수업을 건너뛰고, 이후 주차가 한 주씩 뒤로 밀립니다.
+   *  - 날짜 형식: "YYYY-MM-DD", 시간 형식: "HH:MM" */
+  schedule: {
+    startDate: "2026-03-03",           // 1주차 수업일 (화요일)
+    startTime: "14:00",
+    endTime: "16:45",
+    location: "○○관 000호",
+    submitUrl: "https://lms.korea.ac.kr", // 과제 제출 버튼 기본 링크 (주차별로 따로 지정 가능)
+    holidays: [
+      { date: "2026-05-05", name: "어린이날" },
+    ],
+    // 테스트용: 날짜를 적으면 그날을 '오늘'로 보고 마감 남은 시간·달력을 계산합니다. 평소에는 "" 로 두세요.
+    // (주소 뒤에 ?today=2026-04-01 을 붙여도 같은 효과)
+    todayOverride: "",
+  },
+
+  /* ---------- 커리큘럼 (주차별 펼쳐 보기) ----------
+   *  각 주차에서 쓸 수 있는 항목
+   *    title, summary(접혀 있을 때 보이는 한 줄), topics(학습 내용 목록), videos(참고 영상)
+   *    location / startTime / endTime : 그 주만 다를 때 적기 (안 적으면 schedule 값 사용)
+   *    date : 자동 계산 대신 날짜를 직접 지정할 때 ("YYYY-MM-DD")
+   *    assignment : 과제가 있는 주에만 적기
+   *      - dueAfterDays: 수업일로부터 며칠 뒤 마감인지 (6 = 다음 주 월요일), dueTime: 마감 시각
+   *      - 또는 due: "2026-03-23 23:59" 처럼 마감 일시를 직접 지정
+   *      - submitUrl: 제출 링크 (없으면 schedule.submitUrl 사용) */
   curriculum: {
     title: "커리큘럼",
-    subtitle: "15주 동안 이렇게 진행됩니다",
+    subtitle: "주차를 누르면 날짜·장소·학습 내용·과제를 볼 수 있어요",
     weeks: [
-      { week: "1주", title: "오리엔테이션", text: "강의 소개, AI와 데이터 리터러시의 이해, 실습 계정 준비" },
-      { week: "2주", title: "생성형 AI 기초", text: "LLM의 원리와 한계, 주요 AI 서비스 비교" },
-      { week: "3주", title: "프롬프트 설계", text: "목적에 맞는 질문법과 프롬프트 패턴 익히기" },
-      { week: "4주", title: "데이터 수집", text: "공공데이터 포털 활용, AI로 자료 조사·요약하기" },
-      { week: "5주", title: "데이터 정제", text: "결측치·이상치 처리, 스프레드시트와 AI 함께 쓰기" },
-      { week: "6주", title: "탐색적 분석 Ⅰ", text: "기술통계와 분포 이해, AI에게 분석 요청하기" },
-      { week: "7주", title: "탐색적 분석 Ⅱ", text: "Colab에서 AI가 작성한 파이썬 코드 실행·검토" },
-      { week: "8주", title: "중간 평가", text: "주어진 데이터로 미니 분석 리포트 작성" },
-      { week: "9주", title: "데이터 시각화", text: "목적에 맞는 차트 선택과 AI 기반 시각화" },
-      { week: "10주", title: "문서·리서치 AI", text: "NotebookLM, Perplexity로 자료 기반 인사이트 도출" },
-      { week: "11주", title: "AI 결과 검증과 윤리", text: "환각 확인, 출처 검증, 개인정보·저작권 이슈" },
-      { week: "12주", title: "프로젝트 기획", text: "팀 구성, 문제 정의, 데이터 확보 계획 수립" },
-      { week: "13주", title: "프로젝트 수행", text: "팀별 분석 진행 및 교수자 멘토링" },
-      { week: "14주", title: "최종 발표", text: "팀 프로젝트 결과 발표 및 상호 피드백" },
-      { week: "15주", title: "정리 및 회고", text: "학기 내용 정리, 개인 포트폴리오 완성" },
+      {
+        title: "오리엔테이션",
+        summary: "강의 소개, AI와 데이터 리터러시의 이해, 실습 계정 준비",
+        topics: ["강의 목표와 평가 방법 안내", "데이터 리터러시와 AI 리터러시란?", "실습용 Google · AI 서비스 계정 만들기"],
+        videos: [{ title: "데이터 리터러시 입문", url: "https://www.youtube.com/results?search_query=데이터+리터러시+입문" }],
+      },
+      {
+        title: "생성형 AI 기초",
+        summary: "LLM의 원리와 한계, 주요 AI 서비스 비교",
+        topics: ["대규모 언어 모델(LLM)의 작동 원리", "환각(hallucination)과 AI의 한계", "ChatGPT · Claude · Gemini 비교 체험"],
+        videos: [{ title: "LLM은 어떻게 작동할까", url: "https://www.youtube.com/results?search_query=LLM+작동+원리+쉽게" }],
+      },
+      {
+        title: "프롬프트 설계",
+        summary: "목적에 맞는 질문법과 프롬프트 패턴 익히기",
+        topics: ["역할 · 맥락 · 형식을 갖춘 프롬프트", "단계별 사고 유도와 예시 제시", "프롬프트 개선 실습"],
+        videos: [{ title: "프롬프트 엔지니어링 기초", url: "https://www.youtube.com/results?search_query=프롬프트+엔지니어링+기초" }],
+        assignment: {
+          title: "과제 1 · 나만의 프롬프트 노트",
+          description: "같은 질문을 프롬프트 3가지 방식으로 바꿔 AI에게 물어보고, 결과 차이를 비교한 노트를 제출하세요.",
+          dueAfterDays: 6, dueTime: "23:59",
+        },
+      },
+      {
+        title: "데이터 수집",
+        summary: "공공데이터 포털 활용, AI로 자료 조사·요약하기",
+        topics: ["공공데이터포털 · 통계청 데이터 찾기", "CSV · 엑셀 파일 구조 이해", "AI로 자료 조사하고 출처 정리하기"],
+        videos: [{ title: "공공데이터포털 사용법", url: "https://www.youtube.com/results?search_query=공공데이터포털+사용법" }],
+      },
+      {
+        title: "데이터 정제",
+        summary: "결측치·이상치 처리, 스프레드시트와 AI 함께 쓰기",
+        topics: ["결측치와 이상치 찾기", "구글 시트 함수와 AI 도움 받기", "깔끔한 데이터(tidy data) 원칙"],
+        videos: [{ title: "구글 시트 데이터 정리", url: "https://www.youtube.com/results?search_query=구글+시트+데이터+정리" }],
+        assignment: {
+          title: "과제 2 · 데이터 정제 리포트",
+          description: "제공된 데이터의 문제점을 찾고 AI와 함께 정제한 과정과 결과 파일을 제출하세요.",
+          dueAfterDays: 6, dueTime: "23:59",
+        },
+      },
+      {
+        title: "탐색적 분석 Ⅰ",
+        summary: "기술통계와 분포 이해, AI에게 분석 요청하기",
+        topics: ["평균 · 중앙값 · 분산의 의미", "분포와 상관관계 읽기", "AI에게 분석을 요청하는 좋은 질문"],
+        videos: [{ title: "기술통계 쉽게 이해하기", url: "https://www.youtube.com/results?search_query=기술통계+쉽게" }],
+      },
+      {
+        title: "탐색적 분석 Ⅱ",
+        summary: "Colab에서 AI가 작성한 파이썬 코드 실행·검토",
+        topics: ["Google Colab 시작하기", "AI가 쓴 pandas 코드 읽고 실행하기", "오류가 났을 때 AI와 함께 고치기"],
+        videos: [{ title: "Google Colab 입문", url: "https://www.youtube.com/results?search_query=Google+Colab+입문" }],
+        assignment: {
+          title: "과제 3 · Colab 분석 노트북",
+          description: "관심 있는 공공데이터 하나를 골라 Colab에서 탐색적 분석을 수행하고 노트북 링크를 제출하세요.",
+          dueAfterDays: 6, dueTime: "23:59",
+        },
+      },
+      {
+        title: "중간 평가",
+        summary: "주어진 데이터로 미니 분석 리포트 작성",
+        topics: ["수업 시간 내 미니 리포트 작성 (AI 도구 사용 가능)", "사용한 프롬프트와 검증 과정 함께 제출"],
+        videos: [],
+      },
+      {
+        title: "데이터 시각화",
+        summary: "목적에 맞는 차트 선택과 AI 기반 시각화",
+        topics: ["목적에 맞는 차트 고르기", "좋은 차트 · 나쁜 차트 비교", "AI로 차트 만들고 다듬기"],
+        videos: [{ title: "데이터 시각화 원칙", url: "https://www.youtube.com/results?search_query=데이터+시각화+원칙" }],
+        assignment: {
+          title: "과제 4 · 인포그래픽 만들기",
+          description: "분석 결과 하나를 골라 한 장짜리 인포그래픽으로 만들어 제출하세요.",
+          dueAfterDays: 6, dueTime: "23:59",
+        },
+      },
+      {
+        title: "문서·리서치 AI",
+        summary: "NotebookLM, Perplexity로 자료 기반 인사이트 도출",
+        topics: ["NotebookLM에 자료 올리고 질문하기", "Perplexity로 출처 있는 검색하기", "여러 자료를 종합해 인사이트 정리"],
+        videos: [{ title: "NotebookLM 사용법", url: "https://www.youtube.com/results?search_query=NotebookLM+사용법" }],
+        assignment: {
+          title: "과제 5 · 리서치 브리프",
+          description: "하나의 주제에 대해 AI 리서치 도구로 자료를 조사하고, 출처를 밝힌 1쪽 요약을 제출하세요.",
+          dueAfterDays: 6, dueTime: "23:59",
+        },
+      },
+      {
+        title: "AI 결과 검증과 윤리",
+        summary: "환각 확인, 출처 검증, 개인정보·저작권 이슈",
+        topics: ["AI 답변을 검증하는 체크리스트", "개인정보 · 저작권 · 편향 문제", "책임 있는 AI 활용 사례 토론"],
+        videos: [{ title: "AI 윤리 이야기", url: "https://www.youtube.com/results?search_query=AI+윤리+사례" }],
+      },
+      {
+        title: "프로젝트 기획",
+        summary: "팀 구성, 문제 정의, 데이터 확보 계획 수립",
+        topics: ["팀 구성과 역할 나누기", "분석 질문 정의하기", "데이터 확보 계획과 일정 세우기"],
+        videos: [{ title: "데이터 분석 프로젝트 기획", url: "https://www.youtube.com/results?search_query=데이터+분석+프로젝트+기획" }],
+        assignment: {
+          title: "팀 프로젝트 기획서",
+          description: "팀별로 분석 주제, 질문, 사용할 데이터, 역할 분담, 일정을 담은 기획서를 제출하세요.",
+          dueAfterDays: 6, dueTime: "23:59",
+        },
+      },
+      {
+        title: "프로젝트 수행",
+        summary: "팀별 분석 진행 및 교수자 멘토링",
+        topics: ["팀별 분석 작업", "교수자 · 조교 멘토링", "중간 점검 및 방향 조정"],
+        videos: [],
+      },
+      {
+        title: "최종 발표",
+        summary: "팀 프로젝트 결과 발표 및 상호 피드백",
+        location: "○○관 101호 (발표장)",
+        topics: ["팀별 10분 발표 + 5분 질의응답", "동료 평가와 피드백"],
+        videos: [{ title: "데이터 스토리텔링 발표법", url: "https://www.youtube.com/results?search_query=데이터+스토리텔링+발표" }],
+        assignment: {
+          title: "최종 보고서 제출",
+          description: "발표 피드백을 반영한 최종 보고서와 발표 자료, 사용한 데이터를 함께 제출하세요.",
+          dueAfterDays: 6, dueTime: "23:59",
+        },
+      },
+      {
+        title: "정리 및 회고",
+        summary: "학기 내용 정리, 개인 포트폴리오 완성",
+        topics: ["한 학기 돌아보기", "개인 포트폴리오 정리 방법", "앞으로의 AI 학습 로드맵"],
+        videos: [],
+      },
     ],
+  },
+
+  /* ---------- 수업 달력 ---------- */
+  calendar: {
+    title: "수업 달력",
+    subtitle: "날짜를 누르면 그날의 수업 내용을 볼 수 있어요",
   },
 
   /* ---------- 실습 AI 도구 ---------- */

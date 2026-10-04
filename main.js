@@ -26,6 +26,90 @@
   const s = C.site;
   const fullCourse = `「${s.courseName}」`;
 
+  /* ----- 날짜 도우미 ----- */
+  const WD = ["일", "월", "화", "수", "목", "금", "토"];
+  const pad = (n) => String(n).padStart(2, "0");
+  const parseDate = (str) => {
+    const [y, m, d] = String(str).trim().split("-").map(Number);
+    return new Date(y, m - 1, d);
+  };
+  const withTime = (date, hhmm) => {
+    const [hh, mm] = String(hhmm || "00:00").split(":").map(Number);
+    const x = new Date(date);
+    x.setHours(hh || 0, mm || 0, 0, 0);
+    return x;
+  };
+  const parseDateTime = (str) => {
+    const [d, t] = String(str).trim().split(/[ T]+/);
+    return withTime(parseDate(d), t || "23:59");
+  };
+  const addDays = (date, n) => { const x = new Date(date); x.setDate(x.getDate() + n); return x; };
+  const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const ymd = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const fmtDate = (date, withYear) =>
+    `${withYear ? `${date.getFullYear()}년 ` : ""}${date.getMonth() + 1}월 ${date.getDate()}일 (${WD[date.getDay()]})`;
+  const fmtTime = (date) => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+
+  // '오늘' 기준 (테스트용 덮어쓰기: ?today=YYYY-MM-DD 또는 schedule.todayOverride)
+  const sch = C.schedule || {};
+  const todayParam = new URLSearchParams(location.search).get("today") || sch.todayOverride;
+  const clockOffset = (() => {
+    if (!todayParam || !/^\d{4}-\d{1,2}-\d{1,2}$/.test(todayParam)) return 0;
+    const real = new Date();
+    const fake = parseDate(todayParam);
+    fake.setHours(real.getHours(), real.getMinutes(), real.getSeconds(), real.getMilliseconds());
+    return fake - real;
+  })();
+  const now = () => new Date(Date.now() + clockOffset);
+
+  /* ----- 주차별 일정 계산: 매주 같은 요일, 휴일은 건너뜀 ----- */
+  const holidays = new Map((sch.holidays || []).map((hd) => [ymd(parseDate(hd.date)), hd.name]));
+  const weeks = (() => {
+    let cursor = parseDate(sch.startDate);
+    return (C.curriculum.weeks || []).map((w, i) => {
+      let date;
+      if (w.date) date = parseDate(w.date);
+      else {
+        while (holidays.has(ymd(cursor))) cursor = addDays(cursor, 7);
+        date = cursor;
+      }
+      cursor = addDays(date, 7);
+
+      let assignment = null;
+      if (w.assignment) {
+        const a = w.assignment;
+        const due = a.due
+          ? parseDateTime(a.due)
+          : withTime(addDays(date, a.dueAfterDays ?? 6), a.dueTime || "23:59");
+        assignment = { ...a, due, submitUrl: a.submitUrl || sch.submitUrl || "" };
+      }
+      return {
+        ...w,
+        no: i + 1,
+        label: `${i + 1}주`,
+        date,
+        key: ymd(date),
+        startTime: w.startTime || sch.startTime,
+        endTime: w.endTime || sch.endTime,
+        location: w.location || sch.location,
+        assignment,
+      };
+    });
+  })();
+
+  // 마감까지 남은 시간
+  const remaining = (due) => {
+    const diff = due - now();
+    if (diff <= 0) return { state: "closed", text: "마감되었습니다", chip: "마감" };
+    const mins = Math.floor(diff / 60000);
+    const d = Math.floor(mins / 1440);
+    const h = Math.floor((mins % 1440) / 60);
+    const m = mins % 60;
+    const text = d > 0 ? `${d}일 ${h}시간 남음` : h > 0 ? `${h}시간 ${m}분 남음` : `${Math.max(1, m)}분 남음`;
+    const dayDiff = Math.round((startOfDay(due) - startOfDay(now())) / 86400000);
+    return { state: diff < 72 * 3600000 ? "urgent" : "open", text, chip: dayDiff <= 0 ? "D-Day" : `D-${dayDiff}` };
+  };
+
   /* ----- 헤더 ----- */
   document.title = `${fullCourse} 강의 소개 | ${s.university} ${s.department}`;
   $(".brand-text").textContent = `${s.department} ${fullCourse}`;
@@ -42,11 +126,17 @@
     h.buttons,
     (b) => `<a class="btn ${b.style === "secondary" ? "btn-secondary" : ""}" ${linkAttrs(b)}>${esc(b.label)}</a>`
   );
+  const scheduleText = () => {
+    if (!weeks.length) return "";
+    const f = weeks[0].date;
+    const l = weeks[weeks.length - 1].date;
+    return `${f.getFullYear()}. ${f.getMonth() + 1}. ${f.getDate()} – ${l.getMonth() + 1}. ${l.getDate()} (${weeks.length}주)`;
+  };
   $(".quick-info").innerHTML = list(
     h.quickInfo,
     (q) => `<div class="card info-card reveal">
       <span class="info-icon" aria-hidden="true">${esc(q.icon)}</span>
-      <div><div class="info-label">${esc(q.label)}</div><div class="info-value">${esc(q.value)}</div></div></div>`
+      <div><div class="info-label">${esc(q.label)}</div><div class="info-value">${esc(q.auto === "schedule" ? scheduleText() : q.value)}</div></div></div>`
   );
 
   const petals = $(".petals");
@@ -91,16 +181,270 @@
     </div>`;
   initSlider($("#about .slider"), Number(a.autoplaySeconds) || 0);
 
-  /* ----- 커리큘럼 ----- */
+  /* ----- 커리큘럼: 주차별 펼쳐 보기 ----- */
   const cu = C.curriculum;
+  const timeRange = (w) => `${esc(w.startTime)} – ${esc(w.endTime)}`;
+
+  // 과제 블록 (커리큘럼과 달력 상세에서 함께 사용)
+  const assignmentHtml = (w) => {
+    const a = w.assignment;
+    if (!a) return "";
+    const dueMs = a.due.getTime();
+    return `<div class="assignment">
+      <div class="assignment-head">
+        <span class="assignment-icon" aria-hidden="true">📝</span>
+        <h4>${esc(a.title || "과제")}</h4>
+      </div>
+      <p>${esc(a.description)}</p>
+      <div class="assignment-foot">
+        <div class="due-info">
+          <span class="due-label">마감</span>
+          <strong>${fmtDate(a.due, true)} ${fmtTime(a.due)}</strong>
+          <span class="countdown" data-due="${dueMs}" data-kind="text"></span>
+        </div>
+        <a class="btn btn-sm submit-btn" data-due="${dueMs}" data-kind="submit"
+           data-href="${esc(a.submitUrl)}" data-label="${esc(a.submitLabel || "과제 제출하기")}" target="_blank" rel="noopener"></a>
+      </div>
+    </div>`;
+  };
+
   $("#curriculum").innerHTML =
     sectionHead(cu.title, cu.subtitle) +
-    `<div class="grid grid-3">${list(
-      cu.weeks,
-      (w) => `<article class="card week-card reveal">
-        <span class="week-badge">${esc(w.week)}</span>
-        <div><h3>${esc(w.title)}</h3><p>${esc(w.text)}</p></div></article>`
-    )}</div>`;
+    `<div class="week-toolbar reveal">
+      <span class="week-legend"><span class="legend-chip">📝 과제</span> 과제가 있는 주</span>
+      <button class="text-btn" id="toggle-all-weeks" aria-pressed="false">모두 펼치기</button>
+    </div>
+    <div class="week-list">${list(weeks, (w) => {
+      const dueChip = w.assignment
+        ? `<span class="due-chip" data-due="${w.assignment.due.getTime()}" data-kind="chip"></span>`
+        : "";
+      return `<article class="card week-item reveal" id="week-${w.no}">
+        <button class="week-head" aria-expanded="false" aria-controls="week-body-${w.no}" id="week-head-${w.no}">
+          <span class="week-badge">${esc(w.label)}</span>
+          <span class="week-head-main">
+            <span class="week-title">${esc(w.title)}</span>
+            <span class="week-sub">${fmtDate(w.date)} · ${esc(w.summary || "")}</span>
+          </span>
+          ${dueChip}
+          <span class="chevron" aria-hidden="true"></span>
+        </button>
+        <div class="week-body" id="week-body-${w.no}" role="region" aria-labelledby="week-head-${w.no}">
+          <div><div class="week-body-inner">
+            <dl class="week-meta">
+              <div><dt>📅 날짜</dt><dd>${fmtDate(w.date, true)}</dd></div>
+              <div><dt>⏰ 시간</dt><dd>${timeRange(w)}</dd></div>
+              <div><dt>📍 장소</dt><dd>${esc(w.location)}</dd></div>
+            </dl>
+            ${w.topics && w.topics.length ? `<h4 class="week-h4">학습 내용</h4><ul class="topic-list">${list(w.topics, (t) => `<li>${esc(t)}</li>`)}</ul>` : ""}
+            ${w.videos && w.videos.length ? `<h4 class="week-h4">참고 영상</h4><ul class="video-list">${list(
+              w.videos,
+              (v) => `<li><a href="${esc(v.url)}" target="_blank" rel="noopener"><span class="play" aria-hidden="true">▶</span>${esc(v.title)}</a></li>`
+            )}</ul>` : ""}
+            ${assignmentHtml(w)}
+          </div></div>
+        </div>
+      </article>`;
+    })}</div>`;
+
+  const setWeekOpen = (item, open) => {
+    item.classList.toggle("open", open);
+    $(".week-head", item).setAttribute("aria-expanded", String(open));
+  };
+  const toggleAllBtn = $("#toggle-all-weeks");
+  const syncToggleAll = () => {
+    const allOpen = $$(".week-item").every((it) => it.classList.contains("open"));
+    toggleAllBtn.textContent = allOpen ? "모두 접기" : "모두 펼치기";
+    toggleAllBtn.setAttribute("aria-pressed", String(allOpen));
+  };
+  $("#curriculum").addEventListener("click", (ev) => {
+    const head = ev.target.closest(".week-head");
+    if (head) {
+      const item = head.parentElement;
+      setWeekOpen(item, !item.classList.contains("open"));
+      syncToggleAll();
+    }
+  });
+  toggleAllBtn.addEventListener("click", () => {
+    const open = toggleAllBtn.getAttribute("aria-pressed") !== "true";
+    $$(".week-item").forEach((it) => setWeekOpen(it, open));
+    syncToggleAll();
+  });
+  const openWeek = (no) => {
+    const item = document.getElementById(`week-${no}`);
+    if (!item) return;
+    setWeekOpen(item, true);
+    item.classList.add("visible");
+    syncToggleAll();
+    item.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+    $(".week-head", item).focus({ preventScroll: true });
+  };
+
+  /* ----- 수업 달력 ----- */
+  const cal = C.calendar || {};
+  const events = new Map(); // "YYYY-MM-DD" → { week, dues: [] }
+  const eventsOn = (key) => events.get(key) || events.set(key, { week: null, dues: [] }).get(key);
+  weeks.forEach((w) => {
+    eventsOn(w.key).week = w;
+    if (w.assignment) eventsOn(ymd(w.assignment.due)).dues.push(w);
+  });
+
+  $("#calendar").innerHTML =
+    sectionHead(cal.title || "수업 달력", cal.subtitle) +
+    `<div class="calendar-layout">
+      <div class="card calendar reveal">
+        <div class="cal-head">
+          <button class="cal-nav" data-move="-1" aria-label="이전 달">‹</button>
+          <h3 class="cal-title" aria-live="polite"></h3>
+          <button class="cal-nav" data-move="1" aria-label="다음 달">›</button>
+        </div>
+        <div class="cal-grid cal-weekdays" aria-hidden="true">${list(WD, (d, i) => `<span class="${i === 0 ? "sun" : i === 6 ? "sat" : ""}">${d}</span>`)}</div>
+        <div class="cal-grid cal-days"></div>
+        <div class="cal-foot">
+          <div class="cal-legend">
+            <span><i class="lg lg-class"></i>수업일</span>
+            <span><i class="lg lg-due"></i>과제 마감</span>
+            <span><i class="lg lg-holiday"></i>휴강</span>
+            <span><i class="lg lg-today"></i>오늘</span>
+          </div>
+          <button class="text-btn cal-today">오늘로</button>
+        </div>
+      </div>
+      <div class="card cal-detail reveal" aria-live="polite"></div>
+    </div>`;
+
+  const calDays = $("#calendar .cal-days");
+  const calTitle = $("#calendar .cal-title");
+  const calDetail = $("#calendar .cal-detail");
+  let viewYear, viewMonth, selectedKey;
+
+  const renderCalendar = () => {
+    calTitle.textContent = `${viewYear}년 ${viewMonth + 1}월`;
+    const first = new Date(viewYear, viewMonth, 1);
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+    const todayKey = ymd(now());
+    let html = "";
+    for (let i = 0; i < first.getDay(); i++) html += `<span class="cal-empty"></span>`;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(viewYear, viewMonth, d);
+      const key = ymd(date);
+      const e = events.get(key);
+      const holiday = holidays.get(key);
+      const cls = ["cal-day"];
+      const labels = [`${viewMonth + 1}월 ${d}일 ${WD[date.getDay()]}요일`];
+      if (date.getDay() === 0) cls.push("sun");
+      if (date.getDay() === 6) cls.push("sat");
+      if (key === todayKey) { cls.push("is-today"); labels.push("오늘"); }
+      if (key === selectedKey) cls.push("is-selected");
+      if (e && e.week) { cls.push("is-class"); labels.push(`${e.week.label} 수업`); }
+      if (e && e.dues.length) { cls.push("has-due"); labels.push("과제 마감"); }
+      if (holiday) { cls.push("is-holiday"); labels.push(`${holiday} 휴강`); }
+      const tag = e && e.week
+        ? `<span class="cal-tag">${esc(e.week.label)}</span>`
+        : holiday ? `<span class="cal-tag holiday">${esc(holiday)}</span>` : "";
+      html += `<button class="${cls.join(" ")}" data-key="${key}" aria-pressed="${key === selectedKey}" aria-label="${esc(labels.join(", "))}">
+        <span class="cal-num">${d}</span>${tag}${e && e.dues.length ? `<span class="cal-dot" aria-hidden="true"></span>` : ""}
+      </button>`;
+    }
+    calDays.innerHTML = html;
+  };
+
+  const renderDetail = () => {
+    const date = parseDate(selectedKey);
+    const e = events.get(selectedKey);
+    const holiday = holidays.get(selectedKey);
+    let body = "";
+    if (e && e.week) {
+      const w = e.week;
+      body += `<div class="detail-class">
+        <div class="detail-week"><span class="week-badge">${esc(w.label)}</span><h4>${esc(w.title)}</h4></div>
+        <ul class="detail-meta">
+          <li>⏰ ${timeRange(w)}</li>
+          <li>📍 ${esc(w.location)}</li>
+        </ul>
+        ${w.topics && w.topics.length ? `<ul class="topic-list">${list(w.topics, (t) => `<li>${esc(t)}</li>`)}</ul>` : `<p>${esc(w.summary)}</p>`}
+        ${w.assignment ? `<p class="detail-note">📝 이번 주 과제: <b>${esc(w.assignment.title)}</b> · 마감 ${fmtDate(w.assignment.due)} ${fmtTime(w.assignment.due)}</p>` : ""}
+        <button class="btn btn-sm btn-secondary" data-open-week="${w.no}">${esc(w.label)} 자세히 보기</button>
+      </div>`;
+    }
+    if (e && e.dues.length) {
+      body += list(e.dues, (w) => `<div class="detail-due">
+        <p class="detail-due-title">⏳ 이날 마감되는 과제 ·${esc(w.label)}</p>
+        ${assignmentHtml(w)}
+      </div>`);
+    }
+    if (holiday) body += `<div class="detail-empty"><span aria-hidden="true">🎈</span><p><b>${esc(holiday)}</b> · 휴강입니다.</p></div>`;
+    if (!body) body = `<div class="detail-empty"><span aria-hidden="true">🌸</span><p>이날은 수업이 없어요.<br />분홍색으로 표시된 날짜를 눌러 보세요.</p></div>`;
+    calDetail.innerHTML = `<p class="detail-date">${fmtDate(date, true)}</p>${body}`;
+    updateCountdowns(calDetail);
+  };
+
+  const selectDate = (key, moveView) => {
+    selectedKey = key;
+    if (moveView) {
+      const d = parseDate(key);
+      viewYear = d.getFullYear();
+      viewMonth = d.getMonth();
+    }
+    renderCalendar();
+    renderDetail();
+  };
+
+  // 처음 보여줄 날짜: 학기 중이면 오늘 이후 가장 가까운 수업일, 아니면 1주차
+  const initialKey = (() => {
+    if (!weeks.length) return ymd(now());
+    const today = startOfDay(now());
+    const first = weeks[0].date;
+    const last = weeks[weeks.length - 1].date;
+    if (today >= first && today <= last) return (weeks.find((w) => w.date >= today) || weeks[weeks.length - 1]).key;
+    return weeks[0].key;
+  })();
+
+  $("#calendar").addEventListener("click", (evt) => {
+    const nav = evt.target.closest(".cal-nav");
+    if (nav) {
+      const d = new Date(viewYear, viewMonth + Number(nav.dataset.move), 1);
+      viewYear = d.getFullYear();
+      viewMonth = d.getMonth();
+      renderCalendar();
+      return;
+    }
+    const day = evt.target.closest(".cal-day");
+    if (day) { selectDate(day.dataset.key, false); return; }
+    if (evt.target.closest(".cal-today")) { selectDate(ymd(now()), true); return; }
+    const open = evt.target.closest("[data-open-week]");
+    if (open) openWeek(Number(open.dataset.openWeek));
+  });
+
+  /* ----- 마감 남은 시간 표시 (1분마다 갱신) ----- */
+  function updateCountdowns(root = document) {
+    $$("[data-due]", root).forEach((el) => {
+      const r = remaining(new Date(Number(el.dataset.due)));
+      const kind = el.dataset.kind;
+      if (kind === "chip") {
+        el.textContent = r.state === "closed" ? "과제 마감" : `과제 ${r.chip}`;
+        el.className = `due-chip ${r.state}`;
+      } else if (kind === "text") {
+        el.textContent = r.state === "closed" ? "마감되었습니다" : `${r.chip} · ${r.text}`;
+        el.className = `countdown ${r.state}`;
+      } else if (kind === "submit") {
+        const closed = r.state === "closed" || !el.dataset.href;
+        el.classList.toggle("is-disabled", closed);
+        if (closed) {
+          el.removeAttribute("href");
+          el.setAttribute("aria-disabled", "true");
+          el.textContent = r.state === "closed" ? "제출 마감" : "제출 링크 준비 중";
+        } else {
+          el.href = el.dataset.href;
+          el.removeAttribute("aria-disabled");
+          el.textContent = el.dataset.label;
+        }
+      }
+    });
+  }
+
+  selectDate(initialKey, true);
+  updateCountdowns();
+  setInterval(() => updateCountdowns(), 60 * 1000);
 
   /* ----- AI 도구 ----- */
   const t = C.tools;

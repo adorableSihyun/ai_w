@@ -312,8 +312,175 @@ button { font: inherit; }
 }
 .dot.active { width: 28px; background: var(--grad); }
 
-/* ---------- 커리큘럼 ---------- */
-.week-card { display: flex; gap: 16px; align-items: flex-start; padding: 22px; }
+/* ---------- 커리큘럼: 주차별 펼쳐 보기 ---------- */
+.week-toolbar {
+  max-width: 900px; margin: 0 auto 14px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  color: var(--ink-soft); font-size: .9rem;
+}
+.legend-chip { display: inline-block; padding: 2px 10px; border-radius: 999px; background: var(--pink-100); color: var(--pink-500); font-weight: 700; font-size: .8rem; }
+.text-btn {
+  border: 1px solid var(--lilac-200); background: #fff; color: var(--purple-700);
+  padding: 7px 16px; border-radius: 999px; font-weight: 700; font-size: .88rem; cursor: pointer;
+  transition: background .2s;
+}
+.text-btn:hover { background: var(--lilac-100); }
+
+.week-list { display: grid; gap: 12px; max-width: 900px; margin: 0 auto; }
+.week-item { padding: 0; overflow: hidden; scroll-margin-top: calc(var(--header-h) + 16px); }
+.week-item:hover, .card.week-item.reveal.visible:hover { transform: none; }
+.week-item.open { box-shadow: var(--shadow-hover); }
+.week-head {
+  width: 100%;
+  display: flex; align-items: center; gap: 14px;
+  padding: 18px 22px;
+  border: 0; background: transparent; color: var(--ink); text-align: left;
+  cursor: pointer;
+}
+.week-head:focus-visible { outline: 3px solid var(--lilac-400); outline-offset: -3px; border-radius: var(--radius); }
+.week-head-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.week-title { font-weight: 700; font-size: 1.05rem; }
+.week-sub { color: var(--ink-soft); font-size: .88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chevron {
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%;
+  background: var(--pink-100); position: relative; transition: transform .25s, background .25s;
+}
+.chevron::before {
+  content: ""; position: absolute; left: 50%; top: 45%;
+  width: 8px; height: 8px; border-right: 2px solid var(--purple-700); border-bottom: 2px solid var(--purple-700);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.week-item.open .chevron { transform: rotate(180deg); background: var(--lilac-100); }
+
+.due-chip {
+  flex: 0 0 auto;
+  padding: 4px 10px; border-radius: 999px;
+  font-size: .78rem; font-weight: 700; white-space: nowrap;
+  background: var(--pink-100); color: var(--pink-500);
+}
+.due-chip.urgent { background: var(--grad); color: #fff; }
+.due-chip.closed { background: #f1edf5; color: #9a90a8; }
+
+.week-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .3s ease; }
+.week-body > div { overflow: hidden; }
+.week-item.open .week-body { grid-template-rows: 1fr; }
+.week-body-inner { margin: 0 22px; padding: 4px 0 22px; border-top: 1px dashed var(--line); }
+
+.week-meta { margin: 16px 0 6px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.week-meta > div { background: var(--pink-50); border-radius: var(--radius-sm); padding: 10px 14px; }
+.week-meta dt { font-size: .8rem; color: var(--pink-500); font-weight: 700; }
+.week-meta dd { margin: 0; font-weight: 500; }
+.week-h4 { margin: 16px 0 8px; font-size: .95rem; color: var(--purple-700); }
+
+.topic-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.topic-list li { position: relative; padding-left: 20px; }
+.topic-list li::before { content: ""; position: absolute; left: 4px; top: .65em; width: 8px; height: 8px; border-radius: 50%; background: var(--grad); }
+
+.video-list { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 8px; }
+.video-list a {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 14px; border-radius: 999px;
+  background: #fff; border: 1px solid var(--lilac-200);
+  text-decoration: none; font-size: .9rem; font-weight: 500;
+  transition: background .2s, border-color .2s;
+}
+.video-list a:hover { background: var(--lilac-100); border-color: var(--lilac-400); }
+.play {
+  width: 22px; height: 22px; display: grid; place-items: center;
+  border-radius: 50%; background: var(--grad); color: #fff; font-size: .6rem;
+}
+
+/* 과제 */
+.assignment {
+  margin-top: 18px; padding: 18px 20px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(255, 228, 238, .7), rgba(239, 231, 251, .7));
+  border: 1px solid rgba(232, 121, 166, .25);
+}
+.assignment-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.assignment-head h4 { margin: 0; font-size: 1rem; }
+.assignment-icon { font-size: 1.1rem; }
+.assignment > p { margin: 0 0 14px; color: var(--ink); font-size: .95rem; }
+.assignment-foot { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.due-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: .92rem; }
+.due-label { padding: 2px 8px; border-radius: 6px; background: #fff; color: var(--pink-500); font-weight: 700; font-size: .78rem; }
+.countdown { font-weight: 700; color: var(--purple-700); }
+.countdown.urgent { color: var(--pink-500); }
+.countdown.closed { color: #9a90a8; font-weight: 500; }
+
+.btn-sm { min-width: 0; padding: 9px 18px; font-size: .9rem; }
+.submit-btn.is-disabled { background: #e6e0ec; color: #9a90a8; box-shadow: none; cursor: not-allowed; transform: none; }
+
+/* ---------- 수업 달력 ---------- */
+.calendar-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.calendar:hover, .cal-detail:hover, .card.calendar.reveal.visible:hover, .card.cal-detail.reveal.visible:hover { transform: none; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.cal-title { margin: 0; font-size: 1.25rem; }
+.cal-nav {
+  width: 40px; height: 40px; border: 0; border-radius: 50%;
+  background: var(--pink-100); color: var(--purple-700); font-size: 1.4rem; line-height: 1; cursor: pointer;
+  transition: background .2s, color .2s;
+}
+.cal-nav:hover { background: var(--grad); color: #fff; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.cal-weekdays { margin-bottom: 6px; text-align: center; font-size: .82rem; font-weight: 700; color: var(--ink-soft); }
+.cal-weekdays .sun, .cal-day.sun .cal-num { color: #e0607e; }
+.cal-weekdays .sat, .cal-day.sat .cal-num { color: #7a6ad8; }
+.cal-day {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  min-height: 48px;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 2px;
+  padding: 6px 2px;
+  border: 1px solid transparent; border-radius: 14px;
+  background: rgba(255, 255, 255, .6); color: var(--ink);
+  cursor: pointer;
+  transition: background .2s, border-color .2s, transform .15s;
+}
+.cal-day:hover { background: var(--pink-50); border-color: var(--pink-200); }
+.cal-num { font-weight: 500; font-size: .95rem; line-height: 1.3; }
+.cal-tag {
+  max-width: 100%;
+  padding: 1px 6px; border-radius: 999px;
+  font-size: .68rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: #fff; color: var(--pink-500);
+}
+.cal-tag.holiday { background: transparent; color: #e0607e; }
+.cal-day.is-class { background: linear-gradient(135deg, var(--pink-200), var(--lilac-200)); }
+.cal-day.is-class .cal-num { font-weight: 800; }
+.cal-day.is-holiday { background: #fff0f3; }
+.cal-day.is-today { border-color: var(--purple-500); border-width: 2px; }
+.cal-day.is-selected { background: var(--grad); box-shadow: 0 6px 16px rgba(232, 121, 166, .35); }
+.cal-day.is-selected .cal-num { color: #fff; }
+.cal-day.is-selected .cal-tag { background: rgba(255, 255, 255, .9); }
+.cal-dot {
+  position: absolute; top: 6px; right: 6px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #f0567f; box-shadow: 0 0 0 2px #fff;
+}
+.cal-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+.cal-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .82rem; color: var(--ink-soft); }
+.cal-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.lg { width: 12px; height: 12px; border-radius: 4px; display: inline-block; }
+.lg-class { background: linear-gradient(135deg, var(--pink-200), var(--lilac-200)); }
+.lg-due { border-radius: 50%; background: #f0567f; }
+.lg-holiday { background: #fff0f3; border: 1px solid #f5b5c4; }
+.lg-today { border: 2px solid var(--purple-500); }
+
+.cal-detail { position: sticky; top: calc(var(--header-h) + 16px); }
+.detail-date { margin: 0 0 14px; font-size: 1.15rem; font-weight: 800; }
+.detail-week { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.detail-week h4 { margin: 0; font-size: 1.1rem; }
+.detail-meta { margin: 0 0 12px; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--ink-soft); font-size: .92rem; }
+.detail-class .topic-list { margin-bottom: 14px; }
+.detail-note { margin: 0 0 14px !important; padding: 10px 14px; border-radius: 12px; background: var(--pink-50); font-size: .9rem; color: var(--ink) !important; }
+.detail-due + .detail-due, .detail-class + .detail-due { margin-top: 18px; }
+.detail-due-title { margin: 0 !important; font-weight: 700; color: var(--pink-500) !important; }
+.detail-due .assignment { margin-top: 8px; }
+.detail-empty { text-align: center; padding: 28px 10px; }
+.detail-empty span { font-size: 2.2rem; }
+.detail-empty p { margin: 8px 0 0; }
+
 .week-badge {
   flex: 0 0 auto;
   min-width: 58px;
@@ -325,8 +492,6 @@ button { font: inherit; }
   font-size: .9rem;
   text-align: center;
 }
-.week-card h3 { font-size: 1.02rem; }
-.week-card p { font-size: .94rem; }
 
 /* ---------- AI 도구 ---------- */
 .tool-card { display: block; text-decoration: none; color: inherit; padding: 24px; }
@@ -508,6 +673,8 @@ a.tool-card h3::after { content: " ↗"; color: var(--pink-400); font-size: .85e
   .slide { flex-basis: calc((100% - 20px) / 2); }
   .footer-card { grid-template-columns: auto 1fr; }
   .footer-contacts { grid-column: 1 / -1; grid-template-columns: repeat(2, 1fr); }
+  .calendar-layout { grid-template-columns: 1fr; }
+  .cal-detail { position: static; }
 }
 
 @media (max-width: 860px) {
@@ -544,6 +711,22 @@ a.tool-card h3::after { content: " ↗"; color: var(--pink-400); font-size: .85e
   .stat { padding: 22px 10px; }
   .card { padding: 22px; }
   .slide { flex-basis: 86%; min-height: 0; }
+  .week-head { padding: 14px 14px; gap: 10px; flex-wrap: wrap; }
+  .week-head .week-badge { min-width: 48px; font-size: .82rem; }
+  .week-head-main { flex-basis: calc(100% - 110px); }
+  .week-head .due-chip { order: 3; margin-left: 58px; }
+  .week-head .chevron { width: 26px; height: 26px; }
+  .week-body-inner { margin: 0 14px; padding-bottom: 16px; }
+  .week-meta { grid-template-columns: 1fr; gap: 6px; }
+  .week-meta > div { display: flex; gap: 12px; align-items: baseline; padding: 8px 12px; }
+  .week-meta dt { flex: 0 0 64px; }
+  .assignment { padding: 16px; }
+  .assignment-foot .btn { width: 100%; }
+  .cal-grid { gap: 3px; }
+  .cal-day { min-height: 0; border-radius: 10px; padding: 4px 1px; }
+  .cal-num { font-size: .85rem; }
+  .cal-tag { font-size: .58rem; padding: 0 3px; }
+  .cal-dot { top: 3px; right: 3px; width: 6px; height: 6px; }
   .faq-q { padding: 16px; gap: 10px; }
   .faq-a p { padding: 0 16px 16px 36px; }
   .site-footer { padding: 44px 16px 24px; border-top-left-radius: 28px; border-top-right-radius: 28px; }
