@@ -105,12 +105,25 @@
   const clone = (o) => JSON.parse(JSON.stringify(o));
   // 고친 설정 저장: 서버 모드는 DB(모든 방문자에게 반영), 데모 모드는 이 브라우저
   const saveOverride = async (cfg) => {
-    if (API) await adminApi("/api/admin/config", { method: "PUT", body: { config: cfg } });
-    else store.write("configOverride", cfg);
+    if (API) {
+      // 공개용(내용이 빠진) 설정을 저장해 버리는 일이 없도록 전체 설정을 받은 상태에서만 저장
+      if (window.SITE_CONTENT_LOCKED && !window.SITE_FULL_CONFIG) throw new Error("전체 설정을 아직 불러오지 못했어요. 페이지를 새로고침한 뒤 다시 시도해 주세요.");
+      if (!cfg || !cfg.admin) throw new Error("설정에 관리자 정보가 없어 저장하지 않았어요.");
+      await adminApi("/api/admin/config", { method: "PUT", body: { config: cfg } });
+      ss.set("aiweb:fullConfig", JSON.stringify(cfg));
+    } else store.write("configOverride", cfg);
   };
   const clearOverride = async () => {
-    if (API) await adminApi("/api/admin/config", { method: "DELETE" });
-    else store.remove("configOverride");
+    if (API) {
+      await adminApi("/api/admin/config", { method: "DELETE" });
+      await loadFullConfig();
+    } else store.remove("configOverride");
+  };
+  // 서버 모드: 관리자용 전체 설정(주차별 학습 내용 포함)을 받아 둠
+  const loadFullConfig = async () => {
+    const d = await adminApi("/api/admin/config");
+    ss.set("aiweb:fullConfig", JSON.stringify(d.config));
+    return d;
   };
   // 서버 모드: 신청·명단·출석·제출 기록을 서버에서 가져와 화면용 캐시에 담음
   const loadAdminData = async () => {
@@ -119,6 +132,8 @@
     store.write("applications", d.applications || []);
     store.write("roster", d.roster || []);
     store.write("knownStudents", d.students || {});
+    store.write("approvals", d.approvals || {});
+    store.write("lastLogin", d.lastLogin || {});
     store.keys("attendance:").forEach((k) => store.remove(k));
     store.keys("submissions:").forEach((k) => store.remove(k));
     Object.keys(d.attendance || {}).forEach((sid) => store.write(`attendance:${sid}`, d.attendance[sid]));
@@ -158,11 +173,15 @@
     if (r) return r.name;
     const a = getApps().find((x) => String(x.studentId) === sid);
     if (a) return a.name;
-    return (store.read("knownStudents", {}) || {})[sid] || "";
+    const known = (store.read("knownStudents", {}) || {})[sid];
+    if (known) return known;
+    const ap = (store.read("approvals", {}) || {})[sid];
+    return ap ? ap.name : "";
   };
   const idsFrom = (prefix) => store.keys(prefix).map((k) => k.slice(prefix.length));
   const studentIds = () => {
-    const ids = new Set(getRoster().map((r) => String(r.studentId)));
+    const ids = new Set(Object.keys(store.read("approvals", {}) || {}));
+    getRoster().forEach((r) => ids.add(String(r.studentId)));
     idsFrom("attendance:").forEach((i) => ids.add(i));
     idsFrom("submissions:").forEach((i) => ids.add(i));
     return [...ids].sort();
@@ -266,10 +285,12 @@
         F.api("/api/admin/login", { method: "POST", body: { password: pw } })
           .then((d) => {
             setAdmin(d.token);
-            syncLock();
-            close();
-            openPanel("dashboard");
-            window.dispatchEvent(new Event("aiweb:admin-change"));
+            return loadFullConfig();
+          })
+          .then(() => {
+            // 전체 설정으로 화면을 다시 그리기 위해 새로고침 후 관리자 화면을 엶
+            ss.set("aiweb:adminReopen", JSON.stringify({ tab: "dashboard" }));
+            location.reload();
           })
           .catch((ex) => {
             btn.disabled = false;
@@ -310,10 +331,8 @@
   const TABS = [
     { id: "dashboard", icon: "🏠", label: "대시보드" },
     { id: "notices", icon: "📢", label: "공지 관리" },
-    { id: "roster", icon: "👥", label: "수강생 명단" },
+    { id: "course", icon: "🎓", label: "강의 관리" },
     { id: "applications", icon: "📝", label: "수강 신청 내역" },
-    { id: "attendance", icon: "🙋", label: "출석 현황" },
-    { id: "submissions", icon: "📤", label: "과제 제출 현황" },
     { id: "editor", icon: "✏️", label: "사이트 편집" },
     { id: "files", icon: "💾", label: "설정 파일" },
     { id: "password", icon: "🔑", label: "비밀번호 변경" },
@@ -415,7 +434,8 @@
       (window.SITE_CONFIG_OVERRIDDEN && !API ? `<p class="admin-banner">✏️ 이 브라우저에서 고친 설정이 적용되어 있어요. 다른 방문자에게도 보이게 하려면 <button class="link-btn" data-tab="files">설정 파일</button>을 내려받아 config.js를 교체하세요.</p>` : "") +
       `<div class="tile-grid">
         ${card("📝", "수강 신청", getApps().length, "applications")}
-        ${card("👥", "등록 수강생", getRoster().length, "roster")}
+        ${card("⏳", "승인 대기", studentRows().filter((r) => !r.approved).length, "course")}
+        ${card("👥", "승인된 수강생", studentRows().filter((r) => r.approved).length, "course")}
         ${card("🙋", todayW ? `오늘(${todayW.label}) 출석` : "오늘 수업 없음", todayCount == null ? "-" : todayCount, "attendance")}
         ${card("📤", "과제 제출", subs.length, "submissions")}
         ${card("📢", "공지", (C.notices || []).length, "notices")}
@@ -461,42 +481,78 @@
       .catch((err) => { C.notices = before; throw err; });
   };
 
-  /* ----- 수강생 명단 ----- */
-  RENDER.roster = () => {
-    const roster = getRoster();
-    return head("수강생 명단",
-      `명단을 등록하면 <b>명단에 있는 학생만</b> 학생 공간에 로그인할 수 있어요. (비어 있으면 누구나 데모 로그인 가능)`,
-      `<button class="text-btn" data-admin="roster-csv" ${roster.length ? "" : "disabled"}>⬇ 엑셀(CSV) 내려받기</button>`) +
-      `<div class="admin-grid-2">
-        <form class="admin-card admin-form" data-form="roster-one" novalidate>
-          <h4>한 명씩 추가</h4>
-          <div class="form-row">
-            <div class="field"><label for="rs-id">학번 <span class="req">*</span></label><input id="rs-id" name="studentId" inputmode="numeric" placeholder="2024123456" /></div>
-            <div class="field"><label for="rs-name">이름 <span class="req">*</span></label><input id="rs-name" name="name" placeholder="홍길동" /></div>
-          </div>
-          <div class="form-row">
-            <div class="field"><label for="rs-dept">학과</label><input id="rs-dept" name="department" /></div>
-            <div class="field"><label for="rs-email">이메일</label><input id="rs-email" name="email" type="email" /></div>
-          </div>
-          <p class="field-error" data-err></p>
-          <button class="btn btn-sm" type="submit">추가</button>
-        </form>
-        <form class="admin-card admin-form" data-form="roster-bulk" novalidate>
-          <h4>여러 명 한꺼번에</h4>
-          <p class="admin-note">한 줄에 한 명씩 <code>학번,이름,학과,이메일</code> 순서로 붙여 넣거나, 엑셀에서 저장한 CSV 파일을 고르세요.</p>
-          <textarea name="bulk" rows="4" placeholder="2024123456,홍길동,통계학과,hong@korea.ac.kr&#10;2024123457,김수강,경영학과,"></textarea>
-          <div class="admin-actions">
-            <button class="btn btn-sm" type="submit">붙여 넣은 명단 추가</button>
-            <label class="text-btn file-btn">CSV 파일 선택<input type="file" accept=".csv,.txt" data-admin-file="roster" /></label>
-            <button class="text-btn" type="button" data-admin="roster-from-apps" ${getApps().length ? "" : "disabled"}>신청자 전원 추가</button>
-          </div>
-        </form>
+  /* ----- 강의 관리: 수강생 현황(승인) · 주차별 출석 · 주차별 과제 제출 ----- */
+  let courseSub = "students";
+  let studentFilter = "all";
+  const COURSE_SUBS = [
+    ["students", "👥 수강생 현황"],
+    ["attendance", "🙋 주차별 출석 현황"],
+    ["submissions", "📤 주차별 과제 제출 현황"],
+  ];
+  // 로그인했거나 신청서를 낸 모든 학생 + 승인 상태
+  const studentRows = () => {
+    const apps = getApps();
+    const known = store.read("knownStudents", {}) || {};
+    const last = store.read("lastLogin", {}) || {};
+    const appr = store.read("approvals", {}) || {};
+    const ids = new Set([...Object.keys(known), ...apps.map((a) => String(a.studentId)), ...Object.keys(appr)]);
+    const attBy = {};
+    attendanceRows().forEach((r) => (attBy[r.sid] = r));
+    const subCount = {};
+    submissionRows().forEach((r) => (subCount[r.sid] = (subCount[r.sid] || 0) + 1));
+    return [...ids].sort().map((sid) => {
+      const app = apps.find((a) => String(a.studentId) === sid);
+      return {
+        sid,
+        name: known[sid] || (app && app.name) || (appr[sid] && appr[sid].name) || "",
+        dept: (app && app.department) || "",
+        email: (app && app.email) || "",
+        receipt: (app && app.receipt) || "",
+        lastLogin: last[sid] || 0,
+        loggedIn: !!known[sid],
+        approved: !!appr[sid],
+        approvedAt: appr[sid] ? appr[sid].approvedAt : 0,
+        rate: attBy[sid] ? attBy[sid].rate : null,
+        subs: subCount[sid] || 0,
+      };
+    });
+  };
+
+  RENDER.course = () => head("강의 관리", "수강생을 승인하고, 주차별 출석과 과제 제출을 확인해요.") +
+    `<div class="sub-tabs" role="tablist" aria-label="강의 관리">${list(COURSE_SUBS, ([id, label]) =>
+      `<button role="tab" data-course-sub="${id}" aria-selected="${courseSub === id}">${label}</button>`)}</div>
+    <div class="sub-panel">${(RENDER[`course_${courseSub}`] || RENDER.course_students)()}</div>`;
+
+  RENDER.course_students = () => {
+    const rows = studentRows();
+    const pending = rows.filter((r) => !r.approved).length;
+    const shown = rows.filter((r) => studentFilter === "all" || (studentFilter === "pending" ? !r.approved : r.approved));
+    return `<div class="admin-sub-row sub-head">
+        <div><h4 class="admin-sub">👥 수강생 현황</h4>
+          <p class="admin-note">학생 공간에 로그인하거나 수강 신청서를 낸 학생이에요. <b>승인된 수강생만</b> 주차별 학습 내용을 보고 출석·과제 제출을 할 수 있어요.</p></div>
+        <div class="admin-actions">
+          <button class="text-btn" data-admin="students-csv" ${rows.length ? "" : "disabled"}>⬇ 엑셀(CSV)</button>
+          <button class="btn btn-sm" data-admin="approve-all" ${pending ? "" : "disabled"}>대기 중 ${pending}명 모두 승인</button>
+        </div>
       </div>
-      <div class="admin-sub-row"><h4 class="admin-sub">등록된 수강생 ${roster.length}명</h4>
-        ${roster.length ? `<button class="text-btn sm danger" data-admin="roster-clear">명단 전체 삭제</button>` : ""}</div>
-      ${table(["학번", "이름", "학과", "이메일", ""], roster.map((r, i) => `<tr>
-        <td class="nowrap">${esc(r.studentId)}</td><td>${esc(r.name)}</td><td>${esc(r.department || "")}</td><td>${esc(r.email || "")}</td>
-        <td class="row-actions"><button class="text-btn sm danger" data-admin="roster-del" data-i="${i}">삭제</button></td></tr>`), "아직 등록된 수강생이 없어요.")}`;
+      <div class="filter-row">
+        ${list([["all", `전체 ${rows.length}`], ["pending", `승인 대기 ${pending}`], ["approved", `승인됨 ${rows.length - pending}`]], ([id, label]) =>
+          `<button class="chip-btn" data-student-filter="${id}" aria-pressed="${studentFilter === id}">${label}</button>`)}
+        <input class="admin-search" type="search" placeholder="이름·학번 검색" aria-label="수강생 검색" data-filter="students" />
+        <button class="text-btn sm" data-admin="approve-selected">선택 승인</button>
+        <button class="text-btn sm danger" data-admin="unapprove-selected">선택 승인 취소</button>
+      </div>` +
+      table(["", "학번", "이름", "학과", "신청서", "최근 로그인", "출석률", "과제", "상태", ""], shown.map((r) => `<tr data-search="${esc(`${r.name} ${r.sid}`)}">
+        <td class="center"><input type="checkbox" class="row-check" data-sid="${esc(r.sid)}" aria-label="${esc(r.name)} 선택" /></td>
+        <td class="nowrap">${esc(r.sid)}</td><td class="nowrap">${esc(r.name)}</td><td>${esc(r.dept)}</td>
+        <td class="nowrap">${r.receipt ? esc(r.receipt) : '<span class="muted">미제출</span>'}</td>
+        <td class="nowrap">${r.loggedIn ? esc(stampText(r.lastLogin)) : '<span class="muted">로그인 전</span>'}</td>
+        <td class="center">${r.rate == null ? "-" : `${r.rate}%`}</td><td class="center">${r.subs}</td>
+        <td>${r.approved ? `<span class="st st-p wide" title="${esc(stampText(r.approvedAt))} 승인">승인됨</span>` : '<span class="st st-l wide">승인 대기</span>'}</td>
+        <td class="row-actions">${r.approved
+          ? `<button class="text-btn sm danger" data-admin="unapprove" data-sid="${esc(r.sid)}">승인 취소</button>`
+          : `<button class="btn btn-sm" data-admin="approve" data-sid="${esc(r.sid)}">승인</button>`}</td></tr>`),
+      studentFilter === "all" ? "아직 로그인하거나 신청한 학생이 없어요." : "해당하는 학생이 없어요.");
   };
   const addToRoster = (people) => {
     const roster = getRoster();
@@ -512,6 +568,18 @@
     roster.sort((a, b) => String(a.studentId).localeCompare(String(b.studentId)));
     store.write("roster", roster);
     return { added, dup, bad };
+  };
+  // 승인 / 승인 취소: 서버 모드는 DB에, 데모 모드는 이 브라우저에
+  const setApprovals = (ids, approve) => {
+    if (API) return attempt(adminApi("/api/admin/approvals", { method: "POST", body: { studentIds: ids, approve } })).then((d) => d.changed);
+    const appr = { ...(store.read("approvals", {}) || {}) };
+    let n = 0;
+    ids.forEach((sid) => {
+      if (approve && !appr[sid]) { appr[sid] = { name: knownName(sid), approvedAt: Date.now() }; n++; }
+      if (!approve && appr[sid]) { delete appr[sid]; n++; }
+    });
+    store.write("approvals", appr);
+    return Promise.resolve(n);
   };
   // 명단 추가: 서버 모드는 DB에, 데모 모드는 이 브라우저에
   const addPeople = (people) => (API
@@ -549,10 +617,20 @@
 
   /* ----- 출석 현황 ----- */
   const statusCell = { present: '<span class="st st-p">출</span>', late: '<span class="st st-l">지</span>', absent: '<span class="st st-a">결</span>', "": '<span class="st">·</span>' };
-  RENDER.attendance = () => {
+  const subHead = (title, desc, actions = "") =>
+    `<div class="admin-sub-row sub-head"><div><h4 class="admin-sub">${title}</h4>${desc ? `<p class="admin-note">${desc}</p>` : ""}</div>${actions ? `<div class="admin-actions">${actions}</div>` : ""}</div>`;
+  RENDER.course_attendance = () => {
     const rows = attendanceRows();
-    return head("출석 현황", `출 = 출석, 지 = 지각, 결 = 결석(수업이 끝났는데 기록 없음), · = 아직 수업 전`,
-      `<button class="text-btn" data-admin="att-csv" ${rows.length ? "" : "disabled"}>⬇ 엑셀(CSV) 내려받기</button>`) +
+    // 주차별 합계 (출석+지각 / 대상 인원)
+    const perWeek = weeks.map((w, i) => {
+      let ok = 0, late = 0, absent = 0;
+      rows.forEach((r) => { const s = r.cells[i].s; if (s === "present") ok++; else if (s === "late") late++; else if (s === "absent") absent++; });
+      return { w, ok, late, absent, done: ok + late + absent > 0 };
+    });
+    return subHead("🙋 주차별 출석 현황", `승인된 수강생 기준이에요. 출 = 출석, 지 = 지각, 결 = 결석(수업이 끝났는데 기록 없음), · = 아직 수업 전`,
+      `<button class="text-btn" data-admin="att-csv" ${rows.length ? "" : "disabled"}>⬇ 엑셀(CSV)</button>`) +
+      `<div class="week-summary">${list(perWeek, (x) => `<div class="ws-cell${x.done ? "" : " future"}" title="${esc(`${x.w.label} ${fmtDate(x.w.date)}`)}">
+        <b>${x.w.no}주</b><span>${x.done ? `${x.ok + x.late}/${rows.length}` : "–"}</span>${x.late ? `<small>지각 ${x.late}</small>` : ""}</div>`)}</div>` +
       table(["학번", "이름", ...weeks.map((w) => `${w.no}주`), "출석", "지각", "결석", "출석률"], rows.map((r) => `<tr>
         <td class="nowrap">${esc(r.sid)}</td><td class="nowrap">${esc(r.name)}</td>
         ${list(r.cells, (c, i) => `<td class="center" title="${esc(`${weeks[i].label} ${fmtDate(weeks[i].date)} ${statusLabel[c.s]}${c.t ? ` · ${fmtTime(new Date(c.t))}` : ""}`)}">${statusCell[c.s]}</td>`)}
@@ -561,16 +639,30 @@
   };
 
   /* ----- 과제 제출 현황 ----- */
-  RENDER.submissions = () => {
+  RENDER.course_submissions = () => {
     const rows = submissionRows();
     const aw = weeks.filter((w) => w.assignment);
-    const rosterN = getRoster().length;
-    return head("과제 제출 현황", `총 <b>${rows.length}</b>건 제출`,
-      `<button class="text-btn" data-admin="sub-csv" ${rows.length ? "" : "disabled"}>⬇ 엑셀(CSV) 내려받기</button>`) +
+    const sids = studentIds();
+    const total = sids.length;
+    // 학생 × 과제 표
+    const matrix = sids.length && aw.length
+      ? table(["학번", "이름", ...aw.map((w) => `${w.no}주`), "제출"], sids.map((sid) => {
+          let n = 0;
+          const cells = aw.map((w) => {
+            const r = rows.find((x) => x.sid === sid && x.w.no === w.no);
+            if (!r) return `<td class="center"><span class="st">·</span></td>`;
+            n++;
+            return `<td class="center" title="${esc(`${r.s.fileName} · ${stampText(r.s.time)}`)}"><span class="st ${r.late ? "st-l" : "st-p"}">${r.late ? "지" : "✓"}</span></td>`;
+          }).join("");
+          return `<tr><td class="nowrap">${esc(sid)}</td><td class="nowrap">${esc(knownName(sid))}</td>${cells}<td class="center"><b>${n}/${aw.length}</b></td></tr>`;
+        }), "")
+      : "";
+    return subHead("📤 주차별 과제 제출 현황", `총 <b>${rows.length}</b>건 제출 · ✓ = 제출, 지 = 마감 후 제출, · = 미제출`,
+      `<button class="text-btn" data-admin="sub-csv" ${rows.length ? "" : "disabled"}>⬇ 엑셀(CSV)</button>`) +
       `<div class="chip-row">${list(aw, (w) => {
         const n = rows.filter((r) => r.w.no === w.no).length;
-        return `<span class="count-chip"><b>${esc(w.label)}</b> ${esc(w.assignment.title)} · ${n}${rosterN ? ` / ${rosterN}` : ""}명</span>`;
-      })}</div>` +
+        return `<span class="count-chip"><b>${esc(w.label)}</b> ${esc(w.assignment.title)} · ${n}${total ? ` / ${total}` : ""}명</span>`;
+      })}</div>` + matrix + `<h4 class="admin-sub">제출 파일 목록</h4>` +
       table(["주차", "과제", "학번", "이름", "파일", "크기", "제출 일시", "상태"], rows.map((r) => `<tr>
         <td class="nowrap">${esc(r.w.label)}</td><td>${esc(r.w.assignment.title)}</td><td class="nowrap">${esc(r.sid)}</td><td class="nowrap">${esc(r.name)}</td>
         <td class="wrap">${esc(r.s.fileName)}${API && r.s.id ? ` <button class="text-btn sm" data-admin="sub-file" data-id="${r.s.id}" data-name="${esc(r.s.fileName)}">⬇ 받기</button>` : ""}</td><td class="nowrap">${(r.s.size / 1024).toFixed(1)} KB</td><td class="nowrap">${esc(stampText(r.s.time))}</td>
@@ -759,11 +851,15 @@
     if (tabBtn) {
       if (currentTab === "editor" && edDirty && tabBtn.dataset.tab !== "editor" && !confirm("저장하지 않은 편집 내용이 있어요. 다른 메뉴로 이동할까요? (편집 내용은 그대로 남아 있어요)")) return;
       const t = tabBtn.dataset.tab;
-      if (["dashboard", "applications", "attendance", "submissions", "roster"].includes(t)) refresh(t); else showTab(t);
+      if (["dashboard", "applications", "course"].includes(t)) refresh(t); else showTab(t);
       return;
     }
     const sec = e.target.closest("[data-ed-section]");
     if (sec) { edSection = sec.dataset.edSection; renderEditorSection(); return; }
+    const sub = e.target.closest("[data-course-sub]");
+    if (sub) { courseSub = sub.dataset.courseSub; showTab("course"); return; }
+    const flt = e.target.closest("[data-student-filter]");
+    if (flt) { studentFilter = flt.dataset.studentFilter; showTab("course"); return; }
 
     const ed = e.target.closest("[data-ed]");
     if (ed) {
@@ -790,12 +886,33 @@
     const a = act.dataset.admin;
     const i = Number(act.dataset.i);
     if (a === "close") closePanel();
+    // 수강생 승인 / 승인 취소
+    else if (["approve", "unapprove", "approve-selected", "unapprove-selected", "approve-all"].includes(a)) {
+      let ids;
+      if (a === "approve" || a === "unapprove") ids = [act.dataset.sid];
+      else if (a === "approve-all") ids = studentRows().filter((r) => !r.approved).map((r) => r.sid);
+      else ids = $$(".row-check:checked", panel).map((c) => c.dataset.sid);
+      if (!ids.length) { toast("먼저 학생을 선택해 주세요.", "warn"); return; }
+      const approve = !a.startsWith("unapprove");
+      if (!approve && !confirm(`${ids.length}명의 승인을 취소할까요? 주차별 학습 내용을 볼 수 없게 돼요.`)) return;
+      act.disabled = true;
+      setApprovals(ids, approve)
+        .then((n) => { toast(approve ? `${n}명을 승인했어요.` : `${n}명의 승인을 취소했어요.`, "success"); return refresh("course"); })
+        .catch(() => { act.disabled = false; });
+    }
+    else if (a === "students-csv") {
+      downloadCsv("수강생현황", [["학번", "이름", "학과", "이메일", "접수번호", "최근 로그인", "출석률(%)", "과제 제출", "상태", "승인 일시"],
+        ...studentRows().map((r) => [r.sid, r.name, r.dept, r.email, r.receipt, r.loggedIn ? stampText(r.lastLogin) : "",
+          r.rate == null ? "" : r.rate, r.subs, r.approved ? "승인" : "대기", r.approved ? stampText(r.approvedAt) : ""])]);
+    }
     else if (a === "logout") {
       clearAdmin();
+      ss.del("aiweb:fullConfig");
       syncLock();
       closePanel();
       toast("관리자 화면을 잠갔어요.");
       window.dispatchEvent(new Event("aiweb:admin-change"));
+      if (API && window.SITE_FULL_CONFIG) location.reload(); // 관리자용 전체 내용을 화면에서 내림
     }
     else if (a === "sub-file") {
       // 제출 파일 내려받기 (서버 모드)
@@ -929,7 +1046,7 @@
       }
       return;
     }
-    if (el.dataset.filter === "apps") {
+    if (el.dataset.filter === "apps" || el.dataset.filter === "students") {
       const q = el.value.trim().toLowerCase();
       $$(".admin-table tbody tr", panel).forEach((tr) => { tr.hidden = q && !(tr.dataset.search || "").toLowerCase().includes(q); });
     }
@@ -1239,6 +1356,11 @@
   /* ----- 시작 ----- */
   lockBtn.addEventListener("click", () => (isAdmin() ? openPanel(currentTab) : openLogin()));
   syncLock();
+  // 관리자 토큰은 있는데 전체 설정이 없으면 한 번 받아 와서 다시 그림
+  if (API && isAdmin() && window.SITE_CONTENT_LOCKED && !window.SITE_FULL_CONFIG && !ss.get("aiweb:fullConfigTried")) {
+    ss.set("aiweb:fullConfigTried", "1");
+    loadFullConfig().then(() => location.reload()).catch(() => { /* 토큰 만료 시 adminApi가 안내 */ });
+  } else ss.del("aiweb:fullConfigTried");
   decorateCurriculum();
   // 주차를 고친 뒤 다시 불러왔다면 그 주차를 펼쳐서 보여 줌
   const reopenWeek = Number(ss.get("aiweb:openWeek"));

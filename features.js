@@ -322,11 +322,63 @@
       </form>
     </div>`;
 
+  /* ----- 교수자 승인 (서버 모드) ----- */
+  const readSS = (k) => { try { return JSON.parse(sessionStorage.getItem(k) || "null"); } catch (e) { return null; } };
+  const writeSS = (k, v) => { try { if (v == null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* 무시 */ } };
+  // 승인 여부에 맞춰 주차별 학습 내용을 열거나 닫음 (바뀌면 페이지를 다시 불러옴)
+  const syncWeekUnlock = (me, approved) => {
+    if (!API || !window.SITE_CONTENT_LOCKED || window.SITE_FULL_CONFIG) return;
+    if (!approved) {
+      if (window.SITE_WEEKS_UNLOCKED) { writeSS("aiweb:fullWeeks", null); location.reload(); }
+      return;
+    }
+    api(`/api/student/curriculum?${new URLSearchParams({ studentId: me.studentId, name: me.name })}`)
+      .then((d) => {
+        const cached = readSS("aiweb:fullWeeks");
+        const same = cached && cached.sid === me.studentId && JSON.stringify(cached.weeks) === JSON.stringify(d.weeks);
+        if (same && window.SITE_WEEKS_UNLOCKED === me.studentId) return;
+        writeSS("aiweb:fullWeeks", { sid: me.studentId, weeks: d.weeks });
+        try { sessionStorage.setItem("aiweb:afterReloadToast", "승인된 수강생이에요. 주차별 학습 내용이 열렸어요."); } catch (e) { /* 무시 */ }
+        location.reload();
+      })
+      .catch(() => { /* 다음 접속 때 다시 시도 */ });
+  };
+  const applyRecords = (me, rec) => {
+    store.write(attKey(me.studentId), rec.attendance || {});
+    store.write(subKey(me.studentId), rec.submissions || {});
+    const approved = !!rec.approved;
+    if (!session() || session().approved !== approved || session().studentId !== me.studentId) {
+      store.write("session", { studentId: me.studentId, name: me.name, loginAt: me.loginAt || Date.now(), approved });
+    }
+    syncWeekUnlock(me, approved);
+  };
+
   const renderStudent = () => {
     const box = $("#student");
     const me = session();
     if (!me) {
       box.innerHTML = loginHtml(store.read("lastApplicant", {}) || {});
+      return;
+    }
+    if (API && !me.approved) {
+      // 승인 대기: 출석·과제 제출 대신 안내
+      box.innerHTML = `
+        <div class="student-head">
+          <div class="student-hello">
+            <span class="avatar-sm" aria-hidden="true">${esc(me.name.charAt(0))}</span>
+            <div><h3>${esc(me.name)} 님, 반가워요!</h3><p>학번 ${esc(me.studentId)}</p></div>
+          </div>
+          <button class="text-btn" data-action="logout">로그아웃</button>
+        </div>
+        <div class="pending-box">
+          <span class="pending-ico" aria-hidden="true">⏳</span>
+          <h4>교수자 승인을 기다리고 있어요</h4>
+          <p>승인되면 <b>주차별 학습 내용</b>(강의 자료·영상·과제)과 <b>출석 체크·과제 제출</b>을 이용할 수 있어요.<br />수강 신청서를 아직 내지 않았다면 먼저 제출해 주세요.</p>
+          <div class="pending-actions">
+            <button class="btn btn-sm" data-action="check-approval">승인 여부 다시 확인</button>
+            <a class="btn btn-sm btn-secondary" href="#apply" data-scroll="apply">수강 신청서 쓰기</a>
+          </div>
+        </div>`;
       return;
     }
     box.innerHTML = `
@@ -513,10 +565,8 @@
         btn.disabled = true;
         api("/api/student/login", { method: "POST", body: { studentId: id, name } })
           .then((rec) => {
-            store.write(attKey(id), rec.attendance || {});
-            store.write(subKey(id), rec.submissions || {});
-            store.write("session", { studentId: id, name, loginAt: Date.now() });
-            toast(`${name} 님, 로그인되었어요.`, "success");
+            applyRecords({ studentId: id, name, loginAt: Date.now() }, rec);
+            toast(rec.approved ? `${name} 님, 로그인되었어요.` : `${name} 님, 로그인되었어요. 교수자 승인을 기다려 주세요.`, "success");
           })
           .catch((err) => {
             btn.disabled = false;
@@ -592,6 +642,18 @@
     if (act.dataset.action === "logout") {
       store.remove("session");
       toast("로그아웃되었어요.");
+      if (API) {
+        writeSS("aiweb:fullWeeks", null);
+        if (window.SITE_WEEKS_UNLOCKED) location.reload(); // 열려 있던 주차 내용을 다시 잠금
+      }
+    } else if (act.dataset.action === "check-approval" && me) {
+      act.disabled = true;
+      api(`/api/student/records?${new URLSearchParams({ studentId: me.studentId, name: me.name })}`)
+        .then((rec) => {
+          if (!rec.approved) { toast("아직 승인 전이에요. 조금만 기다려 주세요.", "warn"); act.disabled = false; return; }
+          applyRecords(me, rec);
+        })
+        .catch((err) => { toast(err.message, "warn"); act.disabled = false; if (err.status === 403) store.remove("session"); });
     } else if (act.dataset.action === "attend" && me) {
       const cs = classState();
       if (API) {
@@ -673,12 +735,20 @@
   if (API && session()) {
     const me = session();
     api(`/api/student/records?${new URLSearchParams({ studentId: me.studentId, name: me.name })}`)
-      .then((rec) => {
-        store.write(attKey(me.studentId), rec.attendance || {});
-        store.write(subKey(me.studentId), rec.submissions || {});
-      })
-      .catch((err) => { if (err.status === 403) store.remove("session"); });
+      .then((rec) => applyRecords(me, rec))
+      .catch((err) => {
+        if (err.status === 403) { store.remove("session"); writeSS("aiweb:fullWeeks", null); }
+      });
+  } else if (API && window.SITE_WEEKS_UNLOCKED) {
+    // 로그인 정보 없이 열린 내용이 남아 있으면 다시 잠금
+    writeSS("aiweb:fullWeeks", null);
+    location.reload();
   }
+  // 다시 불러온 뒤 보여 줄 알림
+  try {
+    const msg = sessionStorage.getItem("aiweb:afterReloadToast");
+    if (msg && !window.SiteAdmin) { sessionStorage.removeItem("aiweb:afterReloadToast"); setTimeout(() => toast(msg, "success"), 300); }
+  } catch (e) { /* 무시 */ }
   // 출석 가능 시간·남은 시간이 바뀌므로 30초마다 갱신
   setInterval(() => { if (session()) renderAttendance(); }, 30000);
 

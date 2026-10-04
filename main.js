@@ -21,6 +21,25 @@
       window.SITE_CONFIG_OVERRIDDEN = true;
     }
   }
+  // 서버 모드의 주차별 학습 잠금: 승인 전 방문자는 주차 제목·날짜만 받음
+  //  - 관리자: 로그인 때 받아 둔 전체 설정 사용
+  //  - 승인된 수강생: 승인 확인 후 받아 둔 주차 내용 사용
+  window.SITE_FULL_CONFIG = false;
+  window.SITE_WEEKS_UNLOCKED = "";
+  if (SERVER_MODE && window.SITE_CONTENT_LOCKED && window.SITE_CONFIG) {
+    const readSS = (k) => { try { return JSON.parse(sessionStorage.getItem(k) || "null"); } catch (e) { return null; } };
+    let hasToken = false;
+    try { hasToken = !!sessionStorage.getItem("aiweb:adminToken"); } catch (e) { hasToken = false; }
+    const full = hasToken ? readSS("aiweb:fullConfig") : null;
+    const weeksCache = readSS("aiweb:fullWeeks");
+    if (full && full.site && full.curriculum) {
+      window.SITE_CONFIG = full;
+      window.SITE_FULL_CONFIG = true;
+    } else if (weeksCache && Array.isArray(weeksCache.weeks) && window.SITE_CONFIG.curriculum) {
+      window.SITE_CONFIG.curriculum.weeks = weeksCache.weeks;
+      window.SITE_WEEKS_UNLOCKED = String(weeksCache.sid || "");
+    }
+  }
   const C = window.SITE_CONFIG;
   if (!C) {
     document.body.innerHTML = "<p style='padding:24px'>config.js를 불러오지 못했습니다. 파일 이름과 위치를 확인해 주세요.</p>";
@@ -250,6 +269,7 @@
 
   /* ----- 커리큘럼: 주차별 펼쳐 보기 ----- */
   const cu = C.curriculum;
+  const weeksLocked = weeks.some((w) => w.locked);
   const timeRange = (w) => `${esc(w.startTime)} – ${esc(w.endTime)}`;
 
   // 과제 블록 (커리큘럼과 달력 상세에서 함께 사용)
@@ -372,6 +392,9 @@
 
   $("#curriculum").innerHTML =
     sectionHead(cu.title, cu.subtitle, cu.eyebrow || "Curriculum") +
+    (weeksLocked
+      ? `<div class="week-lock-banner reveal" role="note"><span class="lock-ico" aria-hidden="true">🔒</span><div><b>주차별 학습 내용은 승인된 수강생만 볼 수 있어요.</b><p>학생 공간에서 로그인한 뒤 교수자의 승인을 받으면 학습 내용·강의 자료·영상·과제가 열립니다.</p></div><a class="btn btn-sm" href="#student" data-goto-student>로그인하러 가기</a></div>`
+      : "") +
     `<div class="week-toolbar reveal">
       <span class="week-legend"><span class="legend-chip">📝 과제</span> 과제가 있는 주</span>
       <button class="text-btn" id="toggle-all-weeks" aria-pressed="false">모두 펼치기</button>
@@ -385,7 +408,7 @@
           <span class="week-badge">${esc(w.label)}</span>
           <span class="week-head-main">
             <span class="week-title">${esc(w.title)}</span>
-            <span class="week-sub">${fmtDate(w.date)} · ${esc(w.summary || "")}</span>
+            <span class="week-sub">${fmtDate(w.date)}${w.locked ? " · 🔒" : w.summary ? ` · ${esc(w.summary)}` : ""}</span>
           </span>
           ${dueChip}
           <span class="chevron" aria-hidden="true"></span>
@@ -397,6 +420,7 @@
               <div><dt>⏰ 시간</dt><dd>${timeRange(w)}</dd></div>
               <div><dt>📍 장소</dt><dd>${esc(w.location)}</dd></div>
             </dl>
+            ${w.locked ? `<div class="week-locked"><span aria-hidden="true">🔒</span> 승인된 수강생만 볼 수 있는 내용이에요.</div>` : ""}
             ${w.topics && w.topics.length ? `<h4 class="week-h4">학습 내용</h4><ul class="topic-list">${list(w.topics, (t) => `<li>${esc(t)}</li>`)}</ul>` : ""}
             ${materialsHtml(w)}
             ${videosHtml(w)}
@@ -558,7 +582,9 @@
           <li>⏰ ${timeRange(w)}</li>
           <li>📍 ${esc(w.location)}</li>
         </ul>
-        ${w.topics && w.topics.length ? `<ul class="topic-list">${list(w.topics, (t) => `<li>${esc(t)}</li>`)}</ul>` : `<p>${esc(w.summary)}</p>`}
+        ${w.locked
+          ? `<p class="detail-note">🔒 학습 내용은 승인된 수강생만 볼 수 있어요.</p>`
+          : w.topics && w.topics.length ? `<ul class="topic-list">${list(w.topics, (t) => `<li>${esc(t)}</li>`)}</ul>` : `<p>${esc(w.summary || "")}</p>`}
         ${w.assignment ? `<p class="detail-note">📝 이번 주 과제: <b>${esc(w.assignment.title)}</b> · 마감 ${fmtDate(w.assignment.due)} ${fmtTime(w.assignment.due)}</p>` : ""}
         <button class="btn btn-sm btn-secondary" data-open-week="${w.no}">${esc(w.label)} 자세히 보기</button>
       </div>`;

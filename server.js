@@ -128,9 +128,27 @@ const SCHEMA = [
      file_name TEXT NOT NULL, mime TEXT, size INTEGER NOT NULL, content BYTEA NOT NULL,
      submit_count INTEGER NOT NULL DEFAULT 1, submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
      UNIQUE (student_id, week))`,
+  `CREATE TABLE IF NOT EXISTS approvals (
+     student_id TEXT PRIMARY KEY, name TEXT NOT NULL, approved_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
   `CREATE TABLE IF NOT EXISTS site_config (
      id INTEGER PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
 ];
+
+/* ---------- 공개용 설정 (승인 전 방문자에게 보내는 설정) ----------
+ * 주차별 학습 내용(요약·학습 내용·자료·영상·과제)과 관리자 비밀번호 해시를 빼고 보냄.
+ * 주차 제목과 날짜·시간·장소만 남겨 달력과 목록 틀은 그대로 보이게 함. */
+function publicConfig(cfg) {
+  const out = JSON.parse(JSON.stringify(cfg));
+  delete out.admin;
+  if (out.curriculum && Array.isArray(out.curriculum.weeks)) {
+    out.curriculum.weeks = out.curriculum.weeks.map((w) => {
+      const keep = { title: w.title, locked: true };
+      ["date", "startTime", "endTime", "location"].forEach((k) => { if (w[k]) keep[k] = w[k]; });
+      return keep;
+    });
+  }
+  return out;
+}
 
 /* ---------- HTTP 도우미 ---------- */
 class HttpError extends Error {
@@ -210,8 +228,13 @@ function createApp({ pool, defaultConfig = loadDefaultConfig(), adminSecret = pr
     a.rows.forEach((r) => (attendance[r.week] = { status: r.status, time: new Date(r.checked_at).getTime() }));
     const submissions = {};
     s.rows.forEach((r) => (submissions[r.week] = { fileName: r.file_name, size: r.size, time: new Date(r.submitted_at).getTime(), count: r.submit_count }));
-    return { attendance, submissions };
+    return { attendance, submissions, approved: await isApproved(sid) };
   }
+
+  const isApproved = async (sid) => (await pool.query("SELECT 1 FROM approvals WHERE student_id = $1", [sid])).rows.length > 0;
+  const requireApproved = async (sid) => {
+    if (!(await isApproved(sid))) throw new HttpError(423, "교수자 승인 후 이용할 수 있어요. 승인을 기다려 주세요.");
+  };
 
   // 학번·이름이 로그인한 적 있는 학생인지 확인
   async function verifyStudent(sid, name) {
@@ -297,15 +320,11 @@ function createApp({ pool, defaultConfig = loadDefaultConfig(), adminSecret = pr
       const sid = String(body.studentId || "");
       const name = cleanName(body.name);
       if (!validId(sid) || name.length < 2) throw new HttpError(400, "학번과 이름을 확인해 주세요.");
-      const rc = await pool.query("SELECT COUNT(*)::int AS n FROM roster");
-      if (rc.rows[0].n > 0) {
-        const r = await pool.query("SELECT 1 FROM roster WHERE student_id = $1 AND name = $2", [sid, name]);
-        if (!r.rows.length) throw new HttpError(403, "수강생 명단에 없는 학번·이름이에요. 학번과 이름을 확인하거나 교수자에게 문의해 주세요.");
-      } else {
-        // 명단이 없을 때: 같은 학번을 다른 이름으로 쓰는 것만 막음
-        const r = await pool.query("SELECT name FROM students WHERE student_id = $1", [sid]);
-        if (r.rows[0] && r.rows[0].name !== name) throw new HttpError(403, "이미 다른 이름으로 등록된 학번이에요. 교수자에게 문의해 주세요.");
-      }
+      // 같은 학번을 다른 이름으로 쓰는 것을 막음 (로그인 기록·승인 기록 모두 확인)
+      const known = await pool.query("SELECT name FROM students WHERE student_id = $1", [sid]);
+      const appr = await pool.query("SELECT name FROM approvals WHERE student_id = $1", [sid]);
+      const other = (known.rows[0] && known.rows[0].name !== name) || (appr.rows[0] && appr.rows[0].name !== name);
+      if (other) throw new HttpError(403, "이미 다른 이름으로 등록된 학번이에요. 교수자에게 문의해 주세요.");
       await pool.query(
         `INSERT INTO students (student_id, name) VALUES ($1, $2)
          ON CONFLICT (student_id) DO UPDATE SET name = EXCLUDED.name, last_login = now()`,
@@ -318,12 +337,20 @@ function createApp({ pool, defaultConfig = loadDefaultConfig(), adminSecret = pr
       await verifyStudent(sid, url.searchParams.get("name"));
       return json(res, 200, await studentRecords(sid));
     }
+    // 승인된 수강생에게만 주차별 학습 내용 전체를 보냄
+    if (p === "/api/student/curriculum" && method === "GET") {
+      const sid = url.searchParams.get("studentId");
+      await verifyStudent(sid, url.searchParams.get("name"));
+      await requireApproved(sid);
+      return json(res, 200, { weeks: (config().curriculum && config().curriculum.weeks) || [] });
+    }
 
     // 출석 (서버 시각으로 출석·지각·마감 판단)
     if (p === "/api/attendance" && method === "POST") {
       const body = await readJson(req);
       const sid = String(body.studentId || "");
       await verifyStudent(sid, body.name);
+      await requireApproved(sid);
       const cs = attendanceState(config(), nowMs(config()));
       if (cs.state === "none") throw new HttpError(409, "오늘은 수업이 없어요.");
       if (cs.state === "before") throw new HttpError(409, "아직 출석 체크 시간이 아니에요.");
@@ -340,6 +367,7 @@ function createApp({ pool, defaultConfig = loadDefaultConfig(), adminSecret = pr
     if (p === "/api/submissions" && method === "POST") {
       const sid = url.searchParams.get("studentId");
       await verifyStudent(sid, url.searchParams.get("name"));
+      await requireApproved(sid);
       const weekNo = Number(url.searchParams.get("week"));
       const cfg = config();
       const w = computeWeeks(cfg).find((x) => x.no === weekNo);
@@ -389,13 +417,18 @@ function createApp({ pool, defaultConfig = loadDefaultConfig(), adminSecret = pr
       requireAdmin(req);
 
       if (p === "/api/admin/data" && method === "GET") {
-        const [apps, roster, students, att, subs] = await Promise.all([
+        const [apps, roster, students, att, subs, appr] = await Promise.all([
           pool.query("SELECT id, receipt, data, submitted_at FROM applications ORDER BY id"),
           pool.query("SELECT student_id, name, department, email FROM roster ORDER BY student_id"),
-          pool.query("SELECT student_id, name FROM students"),
+          pool.query("SELECT student_id, name, last_login FROM students"),
           pool.query("SELECT student_id, week, status, checked_at FROM attendance"),
           pool.query("SELECT id, student_id, week, file_name, size, submitted_at, submit_count FROM submissions"),
+          pool.query("SELECT student_id, name, approved_at FROM approvals"),
         ]);
+        const approvals = {};
+        appr.rows.forEach((r) => (approvals[r.student_id] = { name: r.name, approvedAt: new Date(r.approved_at).getTime() }));
+        const lastLogin = {};
+        students.rows.forEach((r) => (lastLogin[r.student_id] = new Date(r.last_login).getTime()));
         const attendance = {};
         att.rows.forEach((r) => ((attendance[r.student_id] = attendance[r.student_id] || {})[r.week] = { status: r.status, time: new Date(r.checked_at).getTime() }));
         const submissions = {};
@@ -408,9 +441,39 @@ function createApp({ pool, defaultConfig = loadDefaultConfig(), adminSecret = pr
           applications: apps.rows.map((r) => ({ ...r.data, id: r.id, receipt: r.receipt, submittedAt: new Date(r.submitted_at).getTime() })),
           roster: roster.rows.map((r) => ({ studentId: r.student_id, name: r.name, department: r.department || "", email: r.email || "" })),
           students: known,
+          lastLogin,
+          approvals,
           attendance,
           submissions,
         });
+      }
+      // 관리자용 전체 설정 (주차별 학습 내용 포함)
+      if (p === "/api/admin/config" && method === "GET") return json(res, 200, { config: config(), overridden: !!override });
+      // 수강생 승인 / 승인 취소
+      if (p === "/api/admin/approvals" && method === "POST") {
+        const body = await readJson(req);
+        const ids = (Array.isArray(body.studentIds) ? body.studentIds : []).map(String).filter(validId).slice(0, 2000);
+        let changed = 0;
+        for (const sid of ids) {
+          if (body.approve) {
+            // 이름은 로그인 기록 → 수강 신청서 순서로 찾음
+            const s = await pool.query("SELECT name FROM students WHERE student_id = $1", [sid]);
+            let name = s.rows[0] && s.rows[0].name;
+            if (!name) {
+              const a = await pool.query("SELECT data FROM applications WHERE student_id = $1", [sid]);
+              name = a.rows[0] && a.rows[0].data && a.rows[0].data.name;
+            }
+            if (!name) continue;
+            const ex = await pool.query("SELECT 1 FROM approvals WHERE student_id = $1", [sid]);
+            if (ex.rows.length) continue;
+            await pool.query("INSERT INTO approvals (student_id, name) VALUES ($1, $2) ON CONFLICT (student_id) DO NOTHING", [sid, cleanName(name)]);
+            changed++;
+          } else {
+            await pool.query("DELETE FROM approvals WHERE student_id = $1", [sid]);
+            changed++;
+          }
+        }
+        return json(res, 200, { changed });
       }
       if ((m = /^\/api\/admin\/applications\/(\d+)$/.exec(p)) && method === "DELETE") {
         await pool.query("DELETE FROM applications WHERE id = $1", [Number(m[1])]);
@@ -479,9 +542,15 @@ function createApp({ pool, defaultConfig = loadDefaultConfig(), adminSecret = pr
       if (req.method !== "GET" && req.method !== "HEAD") throw new HttpError(405, "지원하지 않는 요청이에요.");
 
       // 브라우저가 서버 모드인지 알 수 있게 하는 스크립트 + DB에 저장된 설정
+      // 서버 모드에서는 공개용 설정만 보냄 (주차별 학습 내용·비밀번호 해시 제외)
       if (url.pathname === "/site-data.js") {
-        const body = `window.SITE_API = ${JSON.stringify({ enabled: !!pool })};\nwindow.SITE_CONFIG_OVERRIDE = ${pool && override ? JSON.stringify(override) : "null"};\n`;
+        const body = `window.SITE_API = ${JSON.stringify({ enabled: !!pool })};\n` +
+          `window.SITE_CONTENT_LOCKED = ${pool ? "true" : "false"};\n` +
+          `window.SITE_CONFIG_OVERRIDE = ${pool && override ? JSON.stringify(publicConfig(override)) : "null"};\n`;
         return send(res, 200, body, { "Content-Type": MIME[".js"], "Cache-Control": "no-store" });
+      }
+      if (url.pathname === "/config.js" && pool) {
+        return send(res, 200, `window.SITE_CONFIG = ${JSON.stringify(publicConfig(defaultConfig))};\n`, { "Content-Type": MIME[".js"], "Cache-Control": "no-store" });
       }
 
       let rel = decodeURIComponent(url.pathname).replace(/^\/+/, "") || "index.html";
