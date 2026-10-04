@@ -13,11 +13,12 @@ window.SITE_CONFIG = {
     courseName: "○○○",                 // 「」 없이 과목명만 입력
   },
 
-  /* ---------- 상단 메뉴 (target은 아래 섹션 id: about / curriculum / calendar / tools / enroll / faq / instructor) ---------- */
+  /* ---------- 상단 메뉴 (target은 섹션 id: about / curriculum / calendar / participate / tools / enroll / apply / faq / instructor) ---------- */
   nav: [
     { label: "프로그램 소개", target: "about" },
     { label: "커리큘럼", target: "curriculum" },
     { label: "수업 달력", target: "calendar" },
+    { label: "참여하기", target: "participate" },
     { label: "수강 안내", target: "enroll" },
     { label: "FAQ", target: "faq" },
     { label: "교수자", target: "instructor" },
@@ -32,7 +33,7 @@ window.SITE_CONFIG = {
       "코딩 경험이 없어도 괜찮습니다. 15주 동안 나만의 데이터 분석 결과물을 완성해 보세요.",
     // target: 페이지 안 섹션 id로 이동 / url: 외부 링크(예: 수강신청 사이트)로 이동
     buttons: [
-      { label: "수강 신청하기", target: "enroll", style: "primary" },
+      { label: "수강 신청하기", target: "apply", style: "primary" },
       { label: "커리큘럼 보기", target: "curriculum", style: "secondary" },
     ],
     // 첫 화면 아래 한눈에 보기
@@ -79,7 +80,7 @@ window.SITE_CONFIG = {
     startTime: "14:00",
     endTime: "16:45",
     location: "○○관 000호",
-    submitUrl: "https://lms.korea.ac.kr", // 과제 제출 버튼 기본 링크 (주차별로 따로 지정 가능)
+    submitUrl: "",                     // 과제 제출 외부 링크(예: LMS). 비워두면 이 사이트의 '학생 공간'에서 제출합니다.
     holidays: [
       { date: "2026-05-05", name: "어린이날" },
     ],
@@ -234,6 +235,95 @@ window.SITE_CONFIG = {
   calendar: {
     title: "수업 달력",
     subtitle: "날짜를 누르면 그날의 수업 내용을 볼 수 있어요",
+  },
+
+  /* =====================================================================
+   *  참여 기능 (투표 · 학생 공간 · 수강 신청서 · 팝업 · 환영 효과)
+   *  현재는 '데모 모드'로, 입력한 내용은 각자의 브라우저에만 저장됩니다.
+   *  (여러 학생이 실제로 공유하려면 features.js의 store를 Firebase 등으로 교체)
+   * ===================================================================== */
+  participate: {
+    title: "참여하기",
+    subtitle: "투표하고, 출석하고, 과제를 제출해요",
+    demoNotice: "데모 모드: 입력한 내용은 이 브라우저에만 저장되며 다른 사람과 공유되지 않습니다.",
+  },
+
+  /* ---------- 실시간 투표 ----------
+   *  id는 영어로 겹치지 않게, seed는 시작 표시용 예시 표 수(0으로 두면 빈 상태에서 시작) */
+  poll: {
+    id: "first-topic-2026",            // 질문을 바꾸면 이 id도 바꿔 주세요 (이전 투표와 섞이지 않게)
+    title: "가장 먼저 배우고 싶은 주제는?",
+    description: "하나를 골라 투표해 주세요. 결과가 바로 그래프에 반영됩니다.",
+    options: [
+      { id: "prompt", icon: "💬", label: "프롬프트 설계", seed: 14 },
+      { id: "analysis", icon: "📊", label: "AI로 데이터 분석", seed: 21 },
+      { id: "viz", icon: "🎨", label: "데이터 시각화", seed: 11 },
+      { id: "research", icon: "🔎", label: "AI 리서치 · 문서 요약", seed: 9 },
+      { id: "colab", icon: "🐍", label: "Colab 파이썬 맛보기", seed: 6 },
+    ],
+    seedNote: "예시 표 수가 포함되어 있습니다.",
+  },
+
+  /* ---------- 학생 공간: 로그인 · 출석 · 과제 제출 ---------- */
+  student: {
+    title: "학생 공간",
+    loginTitle: "수강생 로그인",
+    loginHint: "데모: 학번(숫자 10자리)과 이름을 입력하면 로그인됩니다.",
+    attendance: {
+      openBeforeMin: 10,               // 수업 시작 몇 분 전부터 출석 체크 가능
+      lateAfterMin: 10,                // 수업 시작 몇 분 뒤부터 '지각' (수업 종료 후에는 체크 불가)
+    },
+    submission: {
+      maxFileMB: 20,
+      accept: [".pdf", ".docx", ".hwp", ".hwpx", ".pptx", ".xlsx", ".csv", ".ipynb", ".zip", ".png", ".jpg"],
+      demoNote: "데모 모드에서는 파일 이름·크기·제출 시각만 기록되고, 파일 자체는 업로드되지 않습니다.",
+    },
+  },
+
+  /* ---------- 수강 신청서 (수강 안내 섹션 아래에 표시) ----------
+   *  type: text / email / tel / select / radio / textarea / checkbox
+   *  required: 필수 여부, pattern: 형식 검사(정규식), minLength: 최소 글자 수, full: 한 줄 전체 사용 */
+  apply: {
+    title: "수강 신청서",
+    subtitle: "모든 필수 항목(*)을 작성한 뒤 제출해 주세요",
+    period: "신청 기간: 2026. 2. 16 (월) – 2. 27 (금)",
+    submitLabel: "신청서 제출하기",
+    successTitle: "수강 신청이 접수되었습니다!",
+    successText: "확인 메일은 신청 기간이 끝난 뒤 순차적으로 발송됩니다.",
+    fields: [
+      { name: "name", label: "이름", type: "text", required: true, placeholder: "홍길동", autocomplete: "name" },
+      { name: "studentId", label: "학번", type: "text", required: true, placeholder: "2024123456", inputmode: "numeric",
+        pattern: "^\\d{10}$", patternMessage: "학번은 숫자 10자리로 입력해 주세요." },
+      { name: "department", label: "소속 학과", type: "text", required: true, placeholder: "○○학과" },
+      { name: "year", label: "학년", type: "select", required: true, options: ["1학년", "2학년", "3학년", "4학년", "대학원 · 기타"] },
+      { name: "email", label: "이메일", type: "email", required: true, placeholder: "name@korea.ac.kr", autocomplete: "email",
+        pattern: "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$", patternMessage: "올바른 이메일 주소를 입력해 주세요." },
+      { name: "phone", label: "연락처", type: "tel", required: true, placeholder: "010-1234-5678", autocomplete: "tel",
+        pattern: "^01[016789]-?\\d{3,4}-?\\d{4}$", patternMessage: "010-1234-5678 형식으로 입력해 주세요." },
+      { name: "experience", label: "AI 도구 사용 경험", type: "radio", required: true, options: ["처음이에요", "가끔 써 봤어요", "자주 써요"], full: true },
+      { name: "motivation", label: "수강 동기", type: "textarea", required: true, minLength: 20, full: true,
+        placeholder: "이 강의를 통해 배우고 싶은 점을 20자 이상 적어 주세요." },
+      { name: "agree", label: "개인정보 수집·이용에 동의합니다. (수강 관리 목적, 학기 종료 후 파기)", type: "checkbox", required: true, full: true },
+    ],
+  },
+
+  /* ---------- 수강 신청 안내 팝업 ---------- */
+  popup: {
+    enabled: true,
+    delaySeconds: 2,                   // 사이트에 들어온 뒤 몇 초 뒤에 뜰지
+    badge: "수강 신청 안내",
+    title: "2026 상반기 수강 신청이 열렸어요!",
+    text: "AI로 데이터를 다루는 15주, 지금 신청하고 함께 시작해요. 정원 40명으로 마감될 수 있습니다.",
+    period: "신청 기간: 2026. 2. 16 (월) – 2. 27 (금)",
+    buttonLabel: "수강 신청하러 가기",
+    target: "apply",
+    hideTodayLabel: "오늘 하루 보지 않기",
+  },
+
+  /* ---------- 첫 방문 환영 ---------- */
+  welcome: {
+    confetti: true,
+    message: "처음 오셨군요! 환영합니다 🌸",
   },
 
   /* ---------- 실습 AI 도구 ---------- */

@@ -50,12 +50,14 @@
     `${withYear ? `${date.getFullYear()}년 ` : ""}${date.getMonth() + 1}월 ${date.getDate()}일 (${WD[date.getDay()]})`;
   const fmtTime = (date) => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 
-  // '오늘' 기준 (테스트용 덮어쓰기: ?today=YYYY-MM-DD 또는 schedule.todayOverride)
+  // '오늘' 기준 (테스트용 덮어쓰기: ?today=YYYY-MM-DD 또는 ?today=YYYY-MM-DDTHH:MM, schedule.todayOverride)
   const sch = C.schedule || {};
   const todayParam = new URLSearchParams(location.search).get("today") || sch.todayOverride;
   const clockOffset = (() => {
-    if (!todayParam || !/^\d{4}-\d{1,2}-\d{1,2}$/.test(todayParam)) return 0;
+    if (!todayParam) return 0;
     const real = new Date();
+    if (/^\d{4}-\d{1,2}-\d{1,2}[ T]\d{1,2}:\d{2}$/.test(todayParam)) return parseDateTime(todayParam) - real;
+    if (!/^\d{4}-\d{1,2}-\d{1,2}$/.test(todayParam)) return 0;
     const fake = parseDate(todayParam);
     fake.setHours(real.getHours(), real.getMinutes(), real.getSeconds(), real.getMilliseconds());
     return fake - real;
@@ -202,7 +204,7 @@
           <strong>${fmtDate(a.due, true)} ${fmtTime(a.due)}</strong>
           <span class="countdown" data-due="${dueMs}" data-kind="text"></span>
         </div>
-        <a class="btn btn-sm submit-btn" data-due="${dueMs}" data-kind="submit"
+        <a class="btn btn-sm submit-btn" data-due="${dueMs}" data-kind="submit" data-week="${w.no}"
            data-href="${esc(a.submitUrl)}" data-label="${esc(a.submitLabel || "과제 제출하기")}" target="_blank" rel="noopener"></a>
       </div>
     </div>`;
@@ -427,14 +429,16 @@
         el.textContent = r.state === "closed" ? "마감되었습니다" : `${r.chip} · ${r.text}`;
         el.className = `countdown ${r.state}`;
       } else if (kind === "submit") {
-        const closed = r.state === "closed" || !el.dataset.href;
+        // 제출 링크가 비어 있으면 사이트 안의 '학생 공간' 과제 제출로 연결
+        const closed = r.state === "closed";
         el.classList.toggle("is-disabled", closed);
         if (closed) {
           el.removeAttribute("href");
           el.setAttribute("aria-disabled", "true");
-          el.textContent = r.state === "closed" ? "제출 마감" : "제출 링크 준비 중";
+          el.textContent = "제출 마감";
         } else {
-          el.href = el.dataset.href;
+          el.href = el.dataset.href || "#student";
+          if (el.dataset.href) el.target = "_blank"; else el.removeAttribute("target");
           el.removeAttribute("aria-disabled");
           el.textContent = el.dataset.label;
         }
@@ -601,21 +605,24 @@
     $$(".bar > span", el).forEach((b) => (b.style.width = `${b.dataset.width}%`));
     $$(".count", el).forEach(countUp);
   };
-  if ("IntersectionObserver" in window) {
-    const io = new IntersectionObserver(
-      (entries) =>
-        entries.forEach((en) => {
-          if (en.isIntersecting) {
-            reveal(en.target);
-            io.unobserve(en.target);
-          }
-        }),
-      { threshold: 0.12 }
-    );
-    $$(".reveal").forEach((el) => io.observe(el));
-  } else {
-    $$(".reveal").forEach(reveal);
-  }
+  const io = "IntersectionObserver" in window
+    ? new IntersectionObserver(
+        (entries) =>
+          entries.forEach((en) => {
+            if (en.isIntersecting) {
+              reveal(en.target);
+              io.unobserve(en.target);
+            }
+          }),
+        { threshold: 0.12 }
+      )
+    : null;
+  // 나중에 그려지는 요소(features.js)도 등장 효과를 쓰도록 공개
+  const observeReveal = (root = document) => {
+    const els = root.classList && root.classList.contains("reveal") ? [root, ...$$(".reveal", root)] : $$(".reveal", root);
+    els.forEach((el) => (io ? io.observe(el) : reveal(el)));
+  };
+  observeReveal();
 
   /* ----- 슬라이더 ----- */
   function initSlider(root, autoplaySec) {
@@ -678,4 +685,11 @@
     ["mouseleave", "focusout", "touchend"].forEach((evt) => root.addEventListener(evt, () => (paused = false), { passive: true }));
     restart();
   }
+
+  /* ----- features.js(참여 기능)에서 함께 쓰는 도구 ----- */
+  window.SiteCore = {
+    C, $, $$, esc, list, sectionHead, reduceMotion,
+    WD, pad, parseDate, parseDateTime, withTime, addDays, startOfDay, ymd, fmtDate, fmtTime,
+    now, weeks, remaining, updateCountdowns, openWeek, observeReveal,
+  };
 })();
