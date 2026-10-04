@@ -25,8 +25,9 @@
   const esc = (s) =>
     String(s ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
   const list = (arr, fn) => (arr || []).map(fn).join("");
-  const sectionHead = (title, subtitle) =>
-    `<div class="section-head reveal"><h2>${esc(title)}</h2>${subtitle ? `<p>${esc(subtitle)}</p>` : ""}</div>`;
+  // eyebrow: 제목 위의 작은 영문 라벨 (에디토리얼 스타일)
+  const sectionHead = (title, subtitle, eyebrow) =>
+    `<div class="section-head reveal">${eyebrow ? `<span class="eyebrow">${esc(eyebrow)}</span>` : ""}<h2>${esc(title)}</h2>${subtitle ? `<p>${esc(subtitle)}</p>` : ""}</div>`;
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // 페이지 안 이동(target) 또는 외부 링크(url) 버튼/링크 속성
@@ -148,22 +149,16 @@
   };
   $(".quick-info").innerHTML = list(
     h.quickInfo,
-    (q) => `<div class="card info-card reveal">
-      <span class="info-icon" aria-hidden="true">${esc(q.icon)}</span>
-      <div><div class="info-label">${esc(q.label)}</div><div class="info-value">${esc(q.auto === "schedule" ? scheduleText() : q.value)}</div></div></div>`
+    (q) => `<div class="info-item reveal">
+      <span class="info-label">${esc(q.label)}</span>
+      <span class="info-value">${esc(q.auto === "schedule" ? scheduleText() : q.value)}</span></div>`
   );
 
-  const petals = $(".petals");
-  for (let i = 0; i < 18; i++) {
-    const p = document.createElement("span");
-    const size = 0.6 + Math.random() * 0.8;
-    p.className = "petal";
-    p.style.left = `${Math.random() * 100}%`;
-    p.style.width = `${14 * size}px`;
-    p.style.height = `${10 * size}px`;
-    p.style.animationDuration = `${9 + Math.random() * 8}s`;
-    p.style.animationDelay = `${-Math.random() * 16}s`;
-    petals.appendChild(p);
+  // 거대한 세리프 단어와 첫 화면 사진(없으면 그림 패널)
+  $(".hero-word").textContent = h.displayWord || "data";
+  $(".site-footer").dataset.word = h.displayWord || "data";
+  if (h.image) {
+    $(".hero-visual").innerHTML = `<img src="${esc(h.image)}" alt="" />`;
   }
 
   /* ----- 공지사항 (관리자 화면에서 올림) ----- */
@@ -178,7 +173,7 @@
     const today = startOfDay(now());
     noticeSection.innerHTML =
       `<div class="notice-card card">
-        <div class="notice-head"><h2>📢 공지사항</h2><span class="notice-count">${items.length}건</span></div>
+        <div class="notice-head"><div><span class="eyebrow">Notice</span><h2>공지사항</h2></div><span class="notice-count">${items.length}건</span></div>
         <ul class="notice-list">${list(items, (n) => {
           const d = n.date ? parseDate(n.date) : null;
           const isNew = d && (today - d) / 86400000 <= 7 && d <= today;
@@ -206,17 +201,30 @@
 
   /* ----- 통계 카드 ----- */
   const toolCount = (C.tools && C.tools.items ? C.tools.items.length : 0);
-  $("#stats").innerHTML = `<div class="grid grid-4">${list(C.stats, (st) => {
+  $("#stats").innerHTML = `<div class="stats-row">${list(C.stats, (st) => {
     const val = st.auto === "tools" ? toolCount : Number(st.value) || 0;
-    return `<div class="card stat reveal">
+    return `<div class="stat reveal">
       <div class="stat-value"><span class="count" data-to="${val}">${reduceMotion ? val : 0}</span><span class="stat-suffix">${esc(st.suffix)}</span></div>
       <div class="stat-label">${esc(st.label)}</div></div>`;
   })}</div>`;
 
   /* ----- 프로그램 소개: 장점 슬라이드 ----- */
   const a = C.about;
+  const intro = a.intro || {};
+  const introVisual = intro.image
+    ? `<img src="${esc(intro.image)}" alt="" />`
+    : `<div class="art art-object"><i></i><i></i><i></i><span>${esc(h.displayWord || "data")}</span></div>`;
   $("#about").innerHTML =
-    sectionHead(a.title, a.subtitle) +
+    `<div class="about-intro">
+      <div class="about-text reveal">
+        <span class="eyebrow">${esc(a.eyebrow || "Program")}</span>
+        <h2 class="display-h">${esc(intro.title || a.title).replace(/\n/g, "<br />")}</h2>
+        ${intro.text ? `<p>${esc(intro.text)}</p>` : ""}
+        ${intro.buttonLabel ? `<a class="btn btn-sm" ${linkAttrs(intro)}>${esc(intro.buttonLabel)}</a>` : ""}
+      </div>
+      <div class="about-visual reveal" aria-hidden="true">${introVisual}</div>
+    </div>` +
+    sectionHead(a.title, a.subtitle, "Why this class") +
     `<div class="slider reveal" role="region" aria-roledescription="carousel" aria-label="강의 장점">
       <div class="slider-track" tabindex="0">${list(
         a.slides,
@@ -261,7 +269,7 @@
   };
 
   $("#curriculum").innerHTML =
-    sectionHead(cu.title, cu.subtitle) +
+    sectionHead(cu.title, cu.subtitle, cu.eyebrow || "Curriculum") +
     `<div class="week-toolbar reveal">
       <span class="week-legend"><span class="legend-chip">📝 과제</span> 과제가 있는 주</span>
       <button class="text-btn" id="toggle-all-weeks" aria-pressed="false">모두 펼치기</button>
@@ -341,7 +349,7 @@
   });
 
   $("#calendar").innerHTML =
-    sectionHead(cal.title || "수업 달력", cal.subtitle) +
+    sectionHead(cal.title || "수업 달력", cal.subtitle, cal.eyebrow || "Schedule") +
     `<div class="calendar-layout">
       <div class="card calendar reveal">
         <div class="cal-head">
@@ -503,7 +511,7 @@
   /* ----- AI 도구 ----- */
   const t = C.tools;
   $("#tools").innerHTML =
-    sectionHead(t.title, t.subtitle) +
+    sectionHead(t.title, t.subtitle, t.eyebrow || "AI Tools") +
     `<div class="grid grid-4">${list(t.items, (it) => {
       const tag = it.url ? "a" : "div";
       const attrs = it.url ? ` href="${esc(it.url)}" target="_blank" rel="noopener"` : "";
@@ -515,7 +523,7 @@
   /* ----- 수강 안내 ----- */
   const e = C.enroll;
   $("#enroll").innerHTML =
-    sectionHead(e.title, e.subtitle) +
+    sectionHead(e.title, e.subtitle, e.eyebrow || "Admission") +
     `<h3 class="sub-title reveal">${esc(e.preparationTitle || "수강 준비물")}</h3>
     <div class="grid grid-3">${list(
       e.preparation,
@@ -536,7 +544,7 @@
   /* ----- FAQ ----- */
   const f = C.faq;
   $("#faq").innerHTML =
-    sectionHead(f.title, f.subtitle) +
+    sectionHead(f.title, f.subtitle, f.eyebrow || "Questions") +
     `<div class="faq-list">${list(
       f.items,
       (it, i) => `<div class="card faq-item reveal">
@@ -635,6 +643,10 @@
     navLinks.forEach((l) => l.classList.toggle("active", l.dataset.scroll === current));
   };
   window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onScroll);
+  window.addEventListener("load", onScroll);
+  // 웹 글꼴이 늦게 적용되면 페이지 길이가 달라지므로 한 번 더 계산
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(onScroll);
   onScroll();
 
   /* ----- 등장 효과 · 평가 막대 · 숫자 올라가기 ----- */

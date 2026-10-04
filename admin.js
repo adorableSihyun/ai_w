@@ -265,7 +265,7 @@
       panel.setAttribute("aria-label", "관리자 화면");
       panel.innerHTML = `
         <header class="admin-top">
-          <h2>🌸 관리자 화면</h2>
+          <h2>🌿 관리자 화면</h2>
           <div class="admin-top-actions">
             <button class="text-btn" data-admin="close">사이트로 돌아가기</button>
             <button class="text-btn" data-admin="logout">🔒 잠그기</button>

@@ -108,7 +108,7 @@
   const poll = C.poll || { options: [] };
   const stu = C.student || {};
   $("#participate").innerHTML =
-    sectionHead(P.title || "참여하기", P.subtitle) +
+    sectionHead(P.title || "참여하기", P.subtitle, P.eyebrow || "Join us") +
     (P.demoNotice ? `<p class="demo-notice reveal"><span aria-hidden="true">🧪</span>${esc(P.demoNotice)}</p>` : "") +
     `<div class="card poll reveal" id="poll">
       <div class="poll-head">
@@ -193,7 +193,7 @@
       local[pollChoice] = (Number(local[pollChoice]) || 0) + 1;
       store.write(pollKey, local);
       store.write(pollMineKey, pollChoice);
-      toast("투표해 주셔서 고마워요! 🌸", "success");
+      toast("투표해 주셔서 고마워요! 🌿", "success");
     } else if (act.dataset.poll === "revote" && mine) {
       local[mine] = Math.max(0, (Number(local[mine]) || 0) - 1);
       store.write(pollKey, local);
@@ -606,7 +606,7 @@
     </form>`;
 
   $("#apply").innerHTML =
-    sectionHead(A.title || "수강 신청서", A.subtitle) +
+    sectionHead(A.title || "수강 신청서", A.subtitle, A.eyebrow || "Application") +
     `<div class="card apply-card reveal">
       ${A.period ? `<p class="apply-period">🗓️ ${esc(A.period)}</p>` : ""}
       <div class="apply-body">${applyFormHtml()}</div>
@@ -736,7 +736,7 @@
     $(".apply-success", applyBody).focus({ preventScroll: true });
     scrollToEl($("#apply"));
     confetti({ bursts: 2, cannons: false });
-    toast("수강 신청서가 제출되었어요! 🌸", "success");
+    toast("수강 신청서가 제출되었어요! 🌿", "success");
   });
 
   /* =====================================================================
@@ -753,7 +753,7 @@
     const W = window.innerWidth, H = window.innerHeight;
     cv.width = W * dpr; cv.height = H * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const colors = ["#e879a6", "#f29bbd", "#9b7ad8", "#b49ae6", "#ffd1e1", "#ffc6dd", "#ffd166", "#ffffff"];
+    const colors = ["#7d8f6c", "#a3b392", "#cfd8c4", "#4f5f46", "#c9a27e", "#e8d8c3", "#d9b45f", "#fbf9f4"];
     const rnd = (a, b) => a + Math.random() * (b - a);
     const parts = [];
     const make = (x, y, vx, vy, delay) => parts.push({
@@ -828,7 +828,7 @@
     wrap.innerHTML = `
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="popup-title" aria-describedby="popup-text">
         <button class="modal-x" data-popup="close" aria-label="팝업 닫기">×</button>
-        <div class="modal-art" aria-hidden="true">🌸</div>
+        <div class="modal-art" aria-hidden="true">🌿</div>
         ${pop.badge ? `<span class="hero-badge modal-badge">${esc(pop.badge)}</span>` : ""}
         <h3 id="popup-title">${esc(pop.title || "")}</h3>
         <p id="popup-text">${esc(pop.text || "")}</p>
